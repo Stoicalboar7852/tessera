@@ -33,12 +33,15 @@ jobs:
         run: xcodebuild -version
       - name: Build iOS/iPadOS app (unsigned)
         working-directory: clients/ios
+        # moonlight-common's project still targets iOS 8.0; Xcode 26 supports 12.0+ and no longer ships
+        # libarclite for older targets, so the deployment target is raised on the command line only.
         run: |
           xcodebuild \
             -project Moonlight.xcodeproj \
             -target Moonlight \
             -configuration Debug \
             -sdk iphoneos \
+            IPHONEOS_DEPLOYMENT_TARGET=12.0 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
