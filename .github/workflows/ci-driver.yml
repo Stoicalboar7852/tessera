@@ -1,0 +1,67 @@
+---
+# Builds the Tessera virtual display driver with the runner's Visual Studio + WDK and checks the package
+# (InfVerif, Inf2Cat). Signing is not done in CI; see docs/release-signing.md.
+name: driver (VDD)
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'drivers/vdd/**'
+      - '.github/workflows/ci-driver.yml'
+  pull_request:
+    paths:
+      - 'drivers/vdd/**'
+      - '.github/workflows/ci-driver.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Locate MSBuild and WDK
+        id: tools
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\amd64\MSBuild.exe'
+          $kit = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $ver = (Get-ChildItem "$kit\Include" -Directory | Where-Object { Test-Path "$($_.FullName)\um\iddcx" } | Sort-Object Name | Select-Object -Last 1).Name
+          if (-not $ver) { throw 'No WDK with IddCx headers on this runner' }
+          "msbuild=$msbuild" >> $env:GITHUB_OUTPUT
+          "sdk=$ver" >> $env:GITHUB_OUTPUT
+          "bin=$kit\bin\$ver" >> $env:GITHUB_OUTPUT
+          "tools=$kit\Tools\$ver\x64" >> $env:GITHUB_OUTPUT
+          Write-Host "MSBuild: $msbuild  WDK: $ver"
+      - name: Build
+        shell: pwsh
+        run: >-
+          & '${{ steps.tools.outputs.msbuild }}' drivers\vdd\TesseraVdd.vcxproj /nologo /v:minimal
+          /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=${{ steps.tools.outputs.sdk }}
+      - name: Check package (InfVerif, Inf2Cat)
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE '..\build\vdd\x64\Release'
+          $pkg = Join-Path $out 'package'
+          New-Item -ItemType Directory -Force $pkg | Out-Null
+          Copy-Item "$out\TesseraVdd.dll", "$out\TesseraVdd.inf" $pkg
+          $utc = (Get-Date).ToUniversalTime().ToString('MM/dd/yyyy', [Globalization.CultureInfo]::InvariantCulture)
+          $inf = Join-Path $pkg 'TesseraVdd.inf'
+          [IO.File]::WriteAllText($inf, ((Get-Content -Raw $inf) -replace '(?m)^DriverVer\s*=\s*[0-9/]+,', "DriverVer = $utc,"))
+          & '${{ steps.tools.outputs.tools }}\infverif.exe' /w /v $inf
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & '${{ steps.tools.outputs.bin }}\x86\Inf2Cat.exe' /driver:$pkg /os:10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Upload unsigned package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: tessera-vdd-unsigned
+          retention-days: 7
+          path: ${{ github.workspace }}/../build/vdd/x64/Release/package/*

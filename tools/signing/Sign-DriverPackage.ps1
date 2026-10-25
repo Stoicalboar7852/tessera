@@ -26,7 +26,6 @@ foreach ($f in 'TesseraVdd.dll', 'TesseraVdd.inf') {
     if (-not (Test-Path $src)) { throw "missing $src (build the driver first)" }
     Copy-Item $src $OutDir -Force
 }
-Copy-Item $cert.PSPath -Destination $OutDir -ErrorAction SilentlyContinue
 Export-Certificate -Cert $cert -FilePath (Join-Path $OutDir 'tessera-dev-signing.cer') | Out-Null
 
 $ewdk = Join-Path $PSScriptRoot '..\setup\ewdk.ps1'
