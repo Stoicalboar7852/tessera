@@ -1,6 +1,15 @@
 # Phase 0 design: research and setup
 
-- **Status:** Waiting for approval (2026-10-25). No code is written until this is approved.
+- **Status:** Approved 2026-10-25 and implemented. Where the result differs from the design below:
+  - **Nested common-c:** the links and junctions were dropped, because the dev drive is exFAT. Every consumer
+    builds against its pinned upstream common-c until Phase 2 (ADR 0002).
+  - **Toolchain:** EWDK (VS 2026 Build Tools, WDK 10.0.28000) instead of an installed Visual Studio, and portable
+    MSYS2/CMake/Ninja on `T:` (a subst of the project folder) (ADR 0004).
+  - **CCD layer:** our own, not libdisplaydevice (ADR 0003).
+  - **Emergency hotkey:** the agent restores in-process instead of asking the service over a named pipe. The pipe
+    arrives with the window-router API (Phase 6).
+  - **Signing:** no test-signing mode. A locally trusted certificate is used, checked in a Secure Boot VM
+    (`tools/vm/Test-VddInVm.ps1`).
 - **Acceptance (from the brief):** everything builds unchanged in CI; `recover.exe` restores a deliberately
   changed display topology.
 
