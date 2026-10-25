@@ -11,6 +11,7 @@
 
 // local includes
 #include "src/logging.h"
+#include "tessera_watchdog.h"  // [fork] Tessera
 
 // PROC_THREAD_ATTRIBUTE_JOB_LIST is currently missing from MinGW headers
 #ifndef PROC_THREAD_ATTRIBUTE_JOB_LIST
@@ -284,6 +285,9 @@ VOID WINAPI ServiceMain(DWORD, LPTSTR *) {
       continue;
     }
 
+    // [fork] Tessera: undo state left behind by a crash of Sunshine.exe or by a reboot before (re)starting it.
+    tessera_watchdog::restore_if_needed(console_token, "before starting Sunshine.exe");
+
     // Job objects cannot span sessions, so we must create one for each process
     auto job_handle = CreateJobObjectForChildProcess();
     if (job_handle == nullptr) {
@@ -345,6 +349,14 @@ VOID WINAPI ServiceMain(DWORD, LPTSTR *) {
     CloseHandle(job_handle);
   }
 
+  // [fork] Tessera: the service is stopping, so no session can be active any more; undo journaled changes.
+  if (const auto session_id = WTSGetActiveConsoleSessionId(); session_id != 0xFFFFFFFF) {
+    if (auto token = DuplicateTokenForSession(session_id); token != nullptr) {
+      tessera_watchdog::restore_if_needed(token, "service stopping");
+      CloseHandle(token);
+    }
+  }
+
   // Let SCM know we've stopped
   service_status.dwCurrentState = SERVICE_STOPPED;
   SetServiceStatus(service_status_handle, &service_status);
@@ -372,6 +384,11 @@ int main(int argc, char *argv[]) {
   // Check if this is a reinvocation of ourselves to send Ctrl-C to Sunshine.exe
   if (argc == 3 && strcmp(argv[1], "--terminate") == 0) {
     return DoGracefulTermination(atol(argv[2]));
+  }
+
+  // [fork] Tessera: reinvocation in the console session to restore journaled state.
+  if (argc == 2 && strcmp(argv[1], "--tessera-restore") == 0) {
+    return tessera_watchdog::restore_main();
   }
 
   // By default, services have their current directory set to %SYSTEMROOT%\System32.

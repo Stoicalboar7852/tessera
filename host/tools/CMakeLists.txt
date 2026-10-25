@@ -41,9 +41,13 @@ target_link_libraries(audio-info
 )
 target_compile_options(audio-info PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 
-add_executable(sunshinesvc sunshinesvc.cpp)
+# [fork] Tessera: state journal + restore watchdog shared with the helpers (host-helpers/common)
+add_subdirectory("${CMAKE_SOURCE_DIR}/../host-helpers/common" "${CMAKE_BINARY_DIR}/tessera_common")
+
+add_executable(sunshinesvc sunshinesvc.cpp tessera_watchdog.cpp)  # [fork] Tessera: + tessera_watchdog.cpp
 target_link_libraries(sunshinesvc
         ${CMAKE_THREAD_LIBS_INIT}
+        tessera_common  # [fork] Tessera
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
