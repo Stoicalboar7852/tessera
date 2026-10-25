@@ -1,0 +1,44 @@
+---
+# Builds the iOS / iPadOS client without code signing.
+name: client iOS
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/ios/**'
+      - '.gitmodules'
+      - '.github/workflows/ci-client-ios.yml'
+  pull_request:
+    paths:
+      - 'clients/ios/**'
+      - '.gitmodules'
+      - '.github/workflows/ci-client-ios.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Fetch submodules
+        run: git submodule update --init --recursive --depth 1 -- clients/ios
+      - name: Show Xcode
+        run: xcodebuild -version
+      - name: Build iOS/iPadOS app (unsigned)
+        working-directory: clients/ios
+        run: |
+          xcodebuild \
+            -project Moonlight.xcodeproj \
+            -target Moonlight \
+            -configuration Debug \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build

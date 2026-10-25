@@ -1,0 +1,53 @@
+---
+# Builds the Android / Android TV client (upstream builds with `gradlew build` on AppVeyor).
+name: client Android
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/android/**'
+      - '.gitmodules'
+      - '.github/workflows/ci-client-android.yml'
+  pull_request:
+    paths:
+      - 'clients/android/**'
+      - '.gitmodules'
+      - '.github/workflows/ci-client-android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Fetch submodules
+        working-directory: .
+        run: git submodule update --init --recursive --depth 1 -- clients/android
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Install the NDK upstream pins
+        run: |
+          ndk=$(sed -n 's/.*ndkVersion "\(.*\)".*/\1/p' app/build.gradle)
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${ndk}" > /dev/null
+      - name: Build (assemble, unit tests, lint)
+        run: ./gradlew build --no-daemon
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: client-android-debug
+          retention-days: 7
+          path: clients/android/app/build/outputs/apk/**/debug/*.apk
+          if-no-files-found: error
