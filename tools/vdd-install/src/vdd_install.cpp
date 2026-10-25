@@ -33,6 +33,14 @@ namespace {
 
   constexpr wchar_t hardware_id[] = L"Root\\TesseraVdd";
 
+  /// A zeroed SetupAPI struct with its cbSize set.
+  template<class T>
+  T sized() {
+    T v {};
+    v.cbSize = sizeof(T);
+    return v;
+  }
+
   int fail(const error_t &e) {
     std::fprintf(stderr, "ERROR: %s\n", e.to_string().c_str());
     return 1;
@@ -58,7 +66,7 @@ namespace {
       return win32::last_error("SetupDiGetClassDevsW");
     }
     int count = 0;
-    SP_DEVINFO_DATA data {sizeof(SP_DEVINFO_DATA)};
+    auto data = sized<SP_DEVINFO_DATA>();
     for (DWORD i = 0; SetupDiEnumDeviceInfo(set.h, i, &data); ++i) {
       wchar_t ids[512] = {};
       if (!SetupDiGetDeviceRegistryPropertyW(set.h, &data, SPDRP_HARDWAREID, nullptr, reinterpret_cast<PBYTE>(ids), sizeof(ids) - sizeof(wchar_t), nullptr)) {
@@ -120,7 +128,7 @@ namespace {
       if (set.h == INVALID_HANDLE_VALUE) {
         return fail(win32::last_error("SetupDiCreateDeviceInfoList"));
       }
-      SP_DEVINFO_DATA data {sizeof(SP_DEVINFO_DATA)};
+      auto data = sized<SP_DEVINFO_DATA>();
       if (!SetupDiCreateDeviceInfoW(set.h, L"Display", &GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DICD_GENERATE_ID, &data)) {
         return fail(win32::last_error("SetupDiCreateDeviceInfoW"));
       }
@@ -148,8 +156,8 @@ namespace {
     auto n = for_each_device([&](HDEVINFO set, SP_DEVINFO_DATA &data) {
       if (purge) {
         // Remember the driver package before the device goes away.
-        SP_DRVINFO_DATA_W drv {sizeof(SP_DRVINFO_DATA_W)};
-        SP_DEVINSTALL_PARAMS_W params {sizeof(SP_DEVINSTALL_PARAMS_W)};
+        auto drv = sized<SP_DRVINFO_DATA_W>();
+        auto params = sized<SP_DEVINSTALL_PARAMS_W>();
         if (SetupDiGetDeviceInstallParamsW(set, &data, &params)) {
           params.FlagsEx |= DI_FLAGSEX_INSTALLEDDRIVER;
           SetupDiSetDeviceInstallParamsW(set, &data, &params);
@@ -195,7 +203,7 @@ namespace {
     if (set.h == INVALID_HANDLE_VALUE) {
       return fail(win32::last_error("SetupDiGetClassDevsW(interface)"));
     }
-    SP_DEVICE_INTERFACE_DATA iface {sizeof(SP_DEVICE_INTERFACE_DATA)};
+    auto iface = sized<SP_DEVICE_INTERFACE_DATA>();
     if (!SetupDiEnumDeviceInterfaces(set.h, nullptr, &GUID_DEVINTERFACE_TESSERA_VDD, 0, &iface)) {
       return fail(make_error(tessera_code_e::not_found, "vdd-install query", "no Tessera VDD control interface (driver not running?)"));
     }
