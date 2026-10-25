@@ -21,9 +21,8 @@ include(cmake/tessera_dependencies.cmake)
 include(cmake/tessera_compile_options.cmake)
 
 add_subdirectory(host-helpers)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/recover/CMakeLists.txt")
-  add_subdirectory(tools/recover)
-endif()
+add_subdirectory(tools/recover)
+add_subdirectory(tools/vdd-install)
 
 if(TESSERA_BUILD_TESTS)
   enable_testing()
