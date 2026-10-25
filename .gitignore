@@ -1,0 +1,15 @@
+# Build output of Tessera's own components (upstream subtrees keep their own .gitignore files)
+/build/
+/out/
+/host-helpers/build/
+/drivers/vdd/build/
+/tools/build/
+.vs/
+*.user
+CMakeUserPresets.json
+
+# Machine-local signing material and secrets: never commit
+*.pfx
+*.pvk
+/tools/signing/local/
+/tools/vm/local/
