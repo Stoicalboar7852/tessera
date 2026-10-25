@@ -36,7 +36,8 @@ namespace {
       "  move-secondary     move a non-primary display to the far left of the layout\n"
       "  swap-primary       make a non-primary display the primary\n"
       "  refresh            change the primary display's refresh rate\n"
-      "  disable-secondary  turn off a non-primary display (like monitor blanking)"
+      "  disable-secondary  turn off a non-primary display (like monitor blanking)\n"
+      "  resolution         (single display only) switch to a smaller resolution"
     );
   }
 
@@ -124,6 +125,34 @@ namespace {
       }
       p.refresh_rate = {best, 1};
       p.timing.reset();  // let Windows pick the timing for the new rate
+      return t;
+    }
+    if (name == "resolution") {
+      // Single-display friendly: a different resolution for the primary display at the same refresh rate.
+      if (t.paths.size() != 1) {
+        return make_error(tessera_code_e::unsupported, "topoctl", "scenario 'resolution' needs exactly one active display");
+      }
+      auto &p = t.paths[0];
+      const double current = p.refresh_rate.denominator ? static_cast<double>(p.refresh_rate.numerator) / p.refresh_rate.denominator : 0.0;
+      const std::wstring gdi = win32::to_wide(p.gdi_name);
+      DEVMODEW dm {};
+      dm.dmSize = sizeof(dm);
+      DWORD best_w = 0;
+      DWORD best_h = 0;
+      for (DWORD i = 0; EnumDisplaySettingsW(gdi.c_str(), i, &dm); ++i) {
+        const bool same_rate = std::abs(static_cast<double>(dm.dmDisplayFrequency) - current) < 1.5;
+        const bool smaller = dm.dmPelsWidth < p.width && dm.dmPelsHeight < p.height;
+        if (same_rate && smaller && dm.dmPelsWidth * dm.dmPelsHeight > best_w * best_h) {
+          best_w = dm.dmPelsWidth;
+          best_h = dm.dmPelsHeight;
+        }
+      }
+      if (best_w == 0) {
+        return make_error(tessera_code_e::unsupported, "topoctl", "the display offers no smaller resolution at the current refresh rate");
+      }
+      p.width = best_w;
+      p.height = best_h;
+      p.timing.reset();
       return t;
     }
     return make_error(tessera_code_e::invalid_data, "topoctl", "unknown scenario '" + name + "'");
