@@ -1,0 +1,68 @@
+;
+; TesseraVdd.inf - Tessera virtual display driver (UMDF 2 + IddCx), Phase 0 skeleton
+;
+[Version]
+PnpLockDown=1
+Signature="$Windows NT$"
+ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
+Class=Display
+ClassVer=2.0
+Provider=%ManufacturerName%
+CatalogFile=TesseraVdd.cat
+DriverVer=
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$.10.0...19045
+
+[Standard.NT$ARCH$.10.0...19045]
+%DeviceName%=TesseraVdd_Install, Root\TesseraVdd
+
+[SourceDisksFiles]
+TesseraVdd.dll=1
+
+[SourceDisksNames]
+1=%DiskName%
+
+[DestinationDirs]
+TesseraVdd_Copy=13
+
+[TesseraVdd_Copy]
+TesseraVdd.dll
+
+[TesseraVdd_Install.NT]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT
+CopyFiles=TesseraVdd_Copy
+
+[TesseraVdd_Install.NT.hw]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.HW
+AddReg=TesseraVdd_HardwareSettings
+
+[TesseraVdd_HardwareSettings]
+HKR,,"UpperFilters",%REG_MULTI_SZ%,"IndirectKmd"
+; Own driver host process: a hang or crash in another IddCx driver cannot take this one down, and vice versa.
+HKR,"WUDF","DeviceGroupId",%REG_SZ%,"TesseraVddGroup"
+; Only SYSTEM (the host service) and Administrators may open the device and its control interface.
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+
+[TesseraVdd_Install.NT.Services]
+Include=WUDFRD.inf
+Needs=WUDFRD.NT.Services
+
+[TesseraVdd_Install.NT.Wdf]
+UmdfService=TesseraVdd,TesseraVdd_UmdfService
+UmdfServiceOrder=TesseraVdd
+UmdfKernelModeClientPolicy=AllowKernelModeClients
+
+[TesseraVdd_UmdfService]
+UmdfLibraryVersion=$UMDFVERSION$
+ServiceBinary=%13%\TesseraVdd.dll
+UmdfExtensions=IddCx0102
+
+[Strings]
+ManufacturerName="Tessera"
+DiskName="Tessera Virtual Display Driver Installation Disk"
+DeviceName="Tessera Virtual Display Adapter"
+REG_MULTI_SZ=0x00010000
+REG_SZ=0x00000000
