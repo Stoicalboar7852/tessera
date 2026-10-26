@@ -143,7 +143,7 @@ function Remove-Driver {
 
 function Write-Results($state) {
     $lines = @('# Phase 1 acceptance results (Tessera VDD)', '', "Run: $($state.started) .. $(Get-Date -Format o)", "Machine: $($state.machine)", "Driver: $($state.driver)", '',
-        'Targets (brief §4.5): each add/remove < 3 s; no stall > 250 ms; no hang.', '',
+        'Targets (brief section 4.5): each add/remove < 3 s; no stall > 250 ms; no hang.', '',  # ASCII: PowerShell 5.1 reads this file as ANSI
         '| Step | Status | Op | Displays | Ops | Failed | Change median / p95 / max (ms) | compose / ui / sched max (ms) | Stalls > 250 ms | Targets met |',
         '|---|---|---|---|---|---|---|---|---|---|')
     foreach ($s in $state.steps) {
