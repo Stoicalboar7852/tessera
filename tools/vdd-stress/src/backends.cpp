@@ -471,7 +471,9 @@ namespace tessera::stress {
         status_t first_failure;
         for (std::size_t i = 0; i < specs.size(); ++i) {
           if (results.value()[i]) {
+            const vdd::added_monitor_t &a = results.value()[i].value();
             ids_[wanted[i]] = specs[i].id;
+            targets_[wanted[i]] = {a.adapter.LowPart, a.adapter.HighPart, a.target_id};
             handles.push_back(wanted[i]);
           } else if (first_failure) {
             first_failure = results.value()[i].error();
@@ -496,11 +498,20 @@ namespace tessera::stress {
         status_t first_failure;
         for (std::size_t i = 0; i < handles.size(); ++i) {
           ids_.erase(handles[i]);
+          targets_.erase(handles[i]);
           if (!statuses.value()[i] && first_failure) {
             first_failure = statuses.value()[i].error();
           }
         }
         return first_failure;
+      }
+
+      std::optional<target_ref_t> target_of(std::uint32_t handle) const override {
+        const auto it = targets_.find(handle);
+        if (it == targets_.end()) {
+          return std::nullopt;
+        }
+        return it->second;
       }
 
     private:
@@ -525,6 +536,7 @@ namespace tessera::stress {
       bool hdr_;
       std::optional<vdd::vdd_client_t> client_;
       std::map<std::uint32_t, vdd::monitor_id_t> ids_;
+      std::map<std::uint32_t, target_ref_t> targets_;
       std::uint32_t next_ = 1;
     };
 

@@ -4,7 +4,9 @@
  *
  * Creating a device per swap-chain assignment (as SudoVDA does) makes every topology change cost one device per
  * monitor, inside the IddCx callback. Here a device is created once per adapter LUID, lazily on a swap-chain worker
- * thread, and re-created only after the GPU removed it.
+ * thread, and shared by the workers using that GPU. It is released when the last of those workers is done with it:
+ * a device must not outlive the swap chains it served (keeping it until the driver unloads made the device removal
+ * hang on the dev PC, 2026-10-27).
  */
 #pragma once
 
@@ -24,10 +26,14 @@ namespace tessera::vdd {
     device_cache_t(const device_cache_t &) = delete;
     device_cache_t &operator=(const device_cache_t &) = delete;
 
-    /// Returns the DXGI device for the render adapter, creating it on first use.
+    /// Returns the DXGI device for the render adapter, creating it on first use, and counts the caller as a user.
+    /// Every successful get() must be paired with a release() once the caller no longer uses the device.
     HRESULT get(const LUID &adapter, Microsoft::WRL::ComPtr<IDXGIDevice> &out);
 
-    /// Drops the cached device of this adapter if it is `broken` (e.g. after DXGI_ERROR_DEVICE_REMOVED).
+    /// Ends one user of `device`; the cache drops the device when its last user is gone.
+    void release(const LUID &adapter, IDXGIDevice *device);
+
+    /// Stops sharing a `broken` device (e.g. after DXGI_ERROR_DEVICE_REMOVED); its users still release() it.
     void invalidate(const LUID &adapter, IDXGIDevice *broken);
 
     void clear();
@@ -38,6 +44,7 @@ namespace tessera::vdd {
     struct entry_t {
       LUID luid;
       Microsoft::WRL::ComPtr<IDXGIDevice> device;
+      unsigned users;
     };
 
     HRESULT create(const LUID &adapter, Microsoft::WRL::ComPtr<IDXGIDevice> &out);

@@ -77,6 +77,7 @@ namespace tessera::vdd {
     HRESULT exit_hr = S_OK;
     ComPtr<IDXGIDevice> device;
     HRESULT hr = devices_.get(render_adapter_, device);
+    const bool have_device = SUCCEEDED(hr);  // paired with devices_.release() below
     if (FAILED(hr)) {
       exit_reason = "no D3D device";
       exit_hr = hr;
@@ -142,11 +143,17 @@ namespace tessera::vdd {
       }
     }
 
-    device.Reset();
     // Deleting the swap chain tells Windows the driver is done with it; after a failure that also makes Windows
     // assign a new one.
     if (InterlockedCompareExchange(&delete_swapchain_, 0, 0) != 0) {
       WdfObjectDelete(swapchain_);
+    }
+    // Then let go of the device: the cache destroys it when no other monitor's worker uses it, so no D3D device
+    // outlives the swap chains it served.
+    IDXGIDevice *const used = device.Get();
+    device.Reset();
+    if (have_device) {
+      devices_.release(render_adapter_, used);
     }
     if (mmcss != nullptr) {
       AvRevertMmThreadCharacteristics(mmcss);

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,15 @@ namespace tessera::stress {
 
   /// Parses "1920x1080@60" or "1920x1080@59.94".
   result_t<display_mode_t> parse_mode(const std::string &text);
+
+  /// A display target as the CCD API names it (adapter LUID + target ID).
+  struct target_ref_t {
+    std::uint32_t adapter_low = 0;
+    std::int32_t adapter_high = 0;
+    std::uint32_t id = 0;
+
+    bool operator==(const target_ref_t &) const = default;
+  };
 
   /**
    * @brief One way of creating virtual displays.
@@ -70,6 +80,12 @@ namespace tessera::stress {
 
     /// Removes several displays in one request.
     virtual status_t remove_batch(const std::vector<std::uint32_t> &handles);
+
+    /// The CCD target an added display became, if the driver reports it. Lets the runner wait for that display
+    /// instead of counting active paths (Windows may switch other displays on or off meanwhile).
+    virtual std::optional<target_ref_t> target_of(std::uint32_t) const {
+      return std::nullopt;
+    }
 
     /// Restarts the driver with `count` displays (0 disables the device).
     virtual status_t set_count(std::uint32_t count, const display_mode_t &mode);

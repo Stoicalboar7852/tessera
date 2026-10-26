@@ -5,7 +5,7 @@ _Last updated: 2026-10-27_
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress.** Design approved 2026-10-27; driver implemented; VM test and dev-PC acceptance run pending | See "Phase 1 progress". |
+| 1 – VDD | **In progress.** Driver works (VM test passes, first dev-PC run: change times within 3 s). The stall target (≤ 250 ms) is not met, because of Windows' own per-change cost; a second dev-PC run with fixes and an experiment is next | See "Phase 1 progress" and `docs/perf.md`. |
 | 2–12 | Not started | |
 
 ## Phase 1 progress
@@ -24,7 +24,23 @@ _Last updated: 2026-10-27_
   - no WUDFHost crash or UMDF host failure.
 
   The VM composes in software (about 280 ms stalls even when idle), so its timings are not performance results.
-  CI builds the driver, the native components (MSVC and MinGW) and the host.
+  **Windows never assigns swap chains in the GPU-less VM**, so the VM test covers the monitor lifecycle and
+  ownership, but not the frame workers or the D3D device cache. CI builds the driver, the native components (MSVC
+  and MinGW) and the host.
+- **First dev-PC acceptance run** (2026-10-27, `docs/perf.md`):
+  - all 1,600 one-at-a-time changes with 8 displays succeed in under 3 s (worst add 2.33 s);
+  - batched adds of 8 take at most 3.15 s;
+  - stalls are far above 250 ms: Explorer stays unresponsive while changes queue up, and is better but still
+    0.3–2 s per burst when batched;
+  - the headless steps were invalid (harness bug, fixed);
+  - the final uninstall hung, leaving the device stuck "being removed" until a reboot. Probable fix: release each
+    GPU's D3D device with the last swap chain.
+- **Since the first run:**
+  - `vdd-stress` waits for the exact display target (from the driver), wakes on `WM_DISPLAYCHANGE` instead of
+    polling, and counts how often Windows switches physical displays back on in headless runs;
+  - the WPR profile records the driver's own events;
+  - the acceptance run adds a "taskbar on all displays off" experiment;
+  - the VM test also runs HDR monitors and a timed uninstall.
 - **Driver** (`drivers/vdd`, IddCx 1.10, 1.4 minimum): builds with the EWDK at `/W4 /WX` and is dev-signed. It has:
   - runtime add/remove of up to 16 monitors over interface v2;
   - one event-driven worker per monitor and one D3D device per GPU;
@@ -37,7 +53,8 @@ _Last updated: 2026-10-27_
   - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 2 h);
   - `Run-VddRepro.ps1` and `Get-VddPackages.ps1` cover the third-party reproduction;
   - `tools/vm/Test-VddMonitorsInVm.ps1` checks the driver in the Secure Boot VM.
-- **Open:** the dev-PC acceptance run (`tools/vdd-stress/Run-VddAcceptance.ps1`, needs an elevated start), the
+- **Open:** a reboot (to clear the stuck device), the second acceptance run (elevated), a decision on the stall
+  target, the
   `docs/perf.md` numbers, and the Phase 1 summary.
 
 ## Phase 0 acceptance

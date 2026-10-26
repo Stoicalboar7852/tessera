@@ -21,6 +21,8 @@
     <EventProvider Id="Provider_KernelPnP" Name="9C205A39-1250-487D-ABD7-E831C6290539" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
     <!-- Microsoft-Windows-DriverFrameworks-UserMode (UMDF host) -->
     <EventProvider Id="Provider_UMDF" Name="2E35AAEB-857F-4BEB-A418-2E6C0E54D988" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
+    <!-- Tessera.Vdd (TraceLogging, drivers/vdd/src/trace.h) -->
+    <EventProvider Id="Provider_TesseraVdd" Name="9358308D-0904-440B-A1D9-2FB3E81370E5" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
 
     <Profile Id="TesseraDisplay.Verbose.File" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="File" DetailLevel="Verbose">
       <Collectors>
@@ -31,6 +33,7 @@
             <EventProviderId Value="Provider_DisplaySwitch" />
             <EventProviderId Value="Provider_KernelPnP" />
             <EventProviderId Value="Provider_UMDF" />
+            <EventProviderId Value="Provider_TesseraVdd" />
           </EventProviders>
         </EventCollectorId>
       </Collectors>

@@ -21,10 +21,14 @@
     physical-8x100-b   the same, all 8 in one request
     headless-8x100     8 displays x 100 cycles, one at a time, physical monitors off      (acceptance)
     headless-8x100-b   the same, all 8 in one request
+    notaskbar-8x30     8 displays x 30 cycles, one at a time, with "show taskbar on all displays" off  (experiment)
+    notaskbar-8x30-b   the same, all 8 in one request                                            (experiment)
     hold-4             4 displays for 120 s (steady-state stalls and CPU)
     mode-5994          2 displays x 10 cycles at 1920x1080@59.94
     hdr                2 HDR displays x 10 cycles (only if the driver reports HDR support)
-  The whole run takes about two hours. Output: <project>\logs\vdd-accept\<timestamp>\.
+  The notaskbar steps measure how much of Explorer's stall comes from building a taskbar per monitor: they set
+  HKCU ...\Explorer\Advanced\MMTaskbarEnabled = 0 and restart Explorer, then put the previous value back (also after
+  a crash, from state.json). The whole run takes about two hours. Output: <project>\logs\vdd-accept\<timestamp>\.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stress\Run-VddAcceptance.ps1"
@@ -49,6 +53,8 @@ $AllSteps = [ordered]@{
     'physical-8x100-b' = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '100', '--hold-ms', '1000', '--batch')
     'headless-8x100'   = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '100', '--hold-ms', '1000', '--headless')
     'headless-8x100-b' = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '100', '--hold-ms', '1000', '--headless', '--batch')
+    'notaskbar-8x30'   = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '30', '--hold-ms', '1000')
+    'notaskbar-8x30-b' = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '30', '--hold-ms', '1000', '--batch')
     'hold-4'           = @('hold', '--backend', 'tessera', '--count', '4', '--seconds', '120')
     'mode-5994'        = @('run', '--backend', 'tessera', '--counts', '2', '--cycles', '10', '--mode', '1920x1080@59.94')
     'hdr'              = @('run', '--backend', 'tessera', '--counts', '2', '--cycles', '10', '--hdr')
@@ -56,6 +62,38 @@ $AllSteps = [ordered]@{
 
 function Log([string]$msg) { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) }
 function Quote([string]$s) { '"' + $s + '"' }
+
+# --- "Show my taskbar on all displays" (per user; the elevated harness runs as the same user) ---------------------
+$AdvancedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+
+function Restart-Explorer {
+    Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Winlogon restarts the shell (as the user, not elevated) when AutoRestartShell is on, the default.
+    for ($i = 0; $i -lt 60 -and -not (Get-Process explorer -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
+    if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Log '  Explorer did not restart on its own; starting it'; Start-Process explorer.exe }
+    Start-Sleep -Seconds 10  # let the taskbars settle before measuring
+}
+
+function Set-TaskbarOnAllDisplays([bool]$on, $state) {
+    if (-not $on -and -not $state.taskbar_saved) {
+        $state.taskbar_original = (Get-ItemProperty $AdvancedKey -Name MMTaskbarEnabled -ErrorAction SilentlyContinue).MMTaskbarEnabled
+        $state.taskbar_saved = $true
+        Save-State $state
+    }
+    Set-ItemProperty $AdvancedKey -Name MMTaskbarEnabled -Value ([int]$on) -Type DWord
+    Restart-Explorer
+    Log "  taskbar on all displays: $(if ($on) { 'on' } else { 'off' })"
+}
+
+function Restore-Taskbar($state) {
+    if (-not $state.taskbar_saved) { return }
+    if ($null -eq $state.taskbar_original) { Remove-ItemProperty $AdvancedKey -Name MMTaskbarEnabled -ErrorAction SilentlyContinue }
+    else { Set-ItemProperty $AdvancedKey -Name MMTaskbarEnabled -Value ([int]$state.taskbar_original) -Type DWord }
+    $state.taskbar_saved = $false
+    Save-State $state
+    Restart-Explorer
+    Log '  taskbar setting restored'
+}
 
 function Save-State($state) {
     $tmp = Join-Path $OutDir 'state.json.tmp'
@@ -178,7 +216,7 @@ if (-not $Resume) {
     $ids = if ($Steps) { $Steps } else { @($AllSteps.Keys) }
     $state = [pscustomobject]@{
         started = (Get-Date).ToString('o'); machine = "$($os.Caption) $($os.BuildNumber); " + ((Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name) $($_.DriverVersion)" }) -join '; ')
-        driver = ''; installed = $false
+        driver = ''; installed = $false; taskbar_saved = $false; taskbar_original = $null
         steps = @($ids | ForEach-Object { @{ id = $_; status = 'pending'; notes = @(); started = $null; ended = $null } })
     }
     Save-State $state
@@ -204,6 +242,7 @@ if (-not $Resume) {
         # A headless step may have left the physical monitors off: recover.exe undoes the journaled change.
         Invoke-Tool (Join-Path $Stage 'recover.exe') @('--restore', '--fallback') (Join-Path $OutDir 'recover-resume.log') 5 | Out-Null
     }
+    Restore-Taskbar $state  # if the PC went down during a notaskbar step
 }
 
 # Install (again after a crash; vdd-install is idempotent).
@@ -222,14 +261,23 @@ foreach ($s in $state.steps | Where-Object { $_.status -eq 'pending' }) {
     Set-Step $state $s.id 'running' $null
     $dir = Join-Path $OutDir $s.id
     New-Item -ItemType Directory -Force $dir | Out-Null
-    $since = Get-Date
-    $traced = Start-Trace
-    $exit = Invoke-Tool (Join-Path $Stage 'vdd-stress.exe') (@($AllSteps[$s.id]) + @('--out', (Quote $dir))) (Join-Path $dir 'vdd-stress.log') 120
-    Stop-Trace $traced (Join-Path $dir "$($s.id).etl")
-    $n = Export-Events $since (Join-Path $dir 'events-windows.csv')
-    $status = switch ($exit) { 0 { 'passed' } 1 { 'missed' } default { 'failed' } }
-    Set-Step $state $s.id $status "vdd-stress exit $exit; $n Windows events"
-    Log "  $status (exit $exit)"
+    $notaskbar = $s.id -like 'notaskbar-*'
+    try {
+        if ($notaskbar) { Set-TaskbarOnAllDisplays $false $state }
+        $since = Get-Date
+        $traced = Start-Trace
+        $exit = Invoke-Tool (Join-Path $Stage 'vdd-stress.exe') (@($AllSteps[$s.id]) + @('--out', (Quote $dir))) (Join-Path $dir 'vdd-stress.log') 120
+        Stop-Trace $traced (Join-Path $dir "$($s.id).etl")
+        $n = Export-Events $since (Join-Path $dir 'events-windows.csv')
+        $status = switch ($exit) { 0 { 'passed' } 1 { 'missed' } default { 'failed' } }
+        Set-Step $state $s.id $status "vdd-stress exit $exit; $n Windows events"
+        Log "  $status (exit $exit)"
+    } catch {
+        Set-Step $state $s.id 'failed' $_.Exception.Message
+        Log "  FAILED: $($_.Exception.Message)"
+    } finally {
+        if ($notaskbar) { Restore-Taskbar $state }
+    }
     # Safety net between steps: nothing journaled may stay behind.
     Invoke-Tool (Join-Path $Stage 'recover.exe') @('--restore', '--fallback') (Join-Path $dir 'recover.log') 5 | Out-Null
 }

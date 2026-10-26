@@ -25,8 +25,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -196,26 +198,188 @@ namespace {
    * @return Milliseconds since `since`, or -1 on timeout. Asks Windows to extend the desktop once if a new
    *         display stays inactive for `extend_after_ms` (Windows normally extends on its own).
    */
+  double wait_active(std::size_t wanted, steady_t::time_point since, const options_t &o, std::string &detail);
+
+  /// Active display targets (CCD), or nullopt if the query failed.
+  std::optional<std::vector<target_ref_t>> active_targets() {
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      UINT32 paths = 0;
+      UINT32 modes = 0;
+      if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &paths, &modes) != ERROR_SUCCESS) {
+        return std::nullopt;
+      }
+      std::vector<DISPLAYCONFIG_PATH_INFO> p(paths);
+      std::vector<DISPLAYCONFIG_MODE_INFO> m(modes);
+      const LONG rc = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &paths, p.data(), &modes, m.data(), nullptr);
+      if (rc == ERROR_INSUFFICIENT_BUFFER) {
+        continue;  // the topology changed between the two calls
+      }
+      if (rc != ERROR_SUCCESS) {
+        return std::nullopt;
+      }
+      std::vector<target_ref_t> out;
+      for (UINT32 i = 0; i < paths; ++i) {
+        out.push_back({p[i].targetInfo.adapterId.LowPart, p[i].targetInfo.adapterId.HighPart, p[i].targetInfo.id});
+      }
+      return out;
+    }
+    return std::nullopt;
+  }
+
+  /**
+   * @brief Signals display configuration changes (WM_DISPLAYCHANGE, broadcast to every top-level window, also hidden
+   *        ones), so waits re-check the topology when it changes instead of polling the CCD API, whose calls compete
+   *        with Windows' own handling of the change.
+   */
+  class display_watch_t {
+  public:
+    display_watch_t() {
+      changed_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      ready_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      thread_ = std::thread([this] {
+        run();
+      });
+      WaitForSingleObject(ready_, 5000);
+    }
+
+    ~display_watch_t() {
+      if (HWND h = hwnd_.load(); h != nullptr) {
+        PostMessageW(h, WM_CLOSE, 0, 0);
+      }
+      if (thread_.joinable()) {
+        thread_.join();
+      }
+      CloseHandle(changed_);
+      CloseHandle(ready_);
+    }
+
+    display_watch_t(const display_watch_t &) = delete;
+    display_watch_t &operator=(const display_watch_t &) = delete;
+
+    /// Returns when the display configuration changed or after `ms`, whichever comes first.
+    void wait(DWORD ms) const {
+      WaitForSingleObject(changed_, ms);
+    }
+
+  private:
+    static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+      if (msg == WM_DISPLAYCHANGE) {
+        if (auto *self = reinterpret_cast<display_watch_t *>(GetWindowLongPtrW(h, GWLP_USERDATA)); self != nullptr) {
+          SetEvent(self->changed_);
+        }
+      } else if (msg == WM_CLOSE) {
+        DestroyWindow(h);
+        return 0;
+      } else if (msg == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+      }
+      return DefWindowProcW(h, msg, wp, lp);
+    }
+
+    void run() {
+      WNDCLASSEXW wc {};
+      wc.cbSize = sizeof(wc);
+      wc.lpfnWndProc = wndproc;
+      wc.hInstance = GetModuleHandleW(nullptr);
+      wc.lpszClassName = L"TesseraVddStressWatch";
+      RegisterClassExW(&wc);
+      HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, wc.hInstance, nullptr);
+      if (h != nullptr) {
+        SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        hwnd_ = h;
+      }
+      SetEvent(ready_);
+      if (h == nullptr) {
+        return;
+      }
+      MSG msg;
+      while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        DispatchMessageW(&msg);
+      }
+    }
+
+    HANDLE changed_ = nullptr;
+    HANDLE ready_ = nullptr;
+    std::atomic<HWND> hwnd_ {nullptr};
+    std::thread thread_;
+  };
+
+  const display_watch_t *g_watch = nullptr;
+
+  /// Re-checks at least this often even without a WM_DISPLAYCHANGE (it is not sent for every path change).
+  constexpr DWORD recheck_ms = 100;
+
+  void wait_for_change() {
+    if (g_watch != nullptr) {
+      g_watch->wait(recheck_ms);
+    } else {
+      Sleep(recheck_ms);
+    }
+  }
+
+  void add_detail(std::string &detail, const std::string &text) {
+    detail += (detail.empty() ? "" : "; ") + text;
+  }
+
+  bool contains(const std::vector<target_ref_t> &v, const target_ref_t &t) {
+    return std::find(v.begin(), v.end(), t) != v.end();
+  }
+
   double wait_active(std::size_t wanted, steady_t::time_point since, const options_t &o, std::string &detail) {
     bool extended = false;
     while (!g_abort) {
-      auto n = display::active_path_count();
+      const auto now = active_targets();
       const double elapsed = ms_between(since, steady_t::now());
-      if (n && n.value() == wanted) {
+      if (now && now->size() == wanted) {
         return elapsed;
       }
       if (elapsed > o.timeout_ms) {
-        detail += (detail.empty() ? "" : "; ") + std::string("timeout with ") + (n ? std::to_string(n.value()) : "?") + " active paths, wanted " + std::to_string(wanted);
+        add_detail(detail, "timeout with " + (now ? std::to_string(now->size()) : std::string("?")) + " active paths, wanted " + std::to_string(wanted));
         return -1;
       }
-      if (!extended && n && n.value() < wanted && elapsed > o.extend_after_ms) {
+      if (!extended && now && now->size() < wanted && elapsed > o.extend_after_ms) {
         extended = true;
         const LONG rc = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_TOPOLOGY_EXTEND);
-        detail += (detail.empty() ? "" : "; ") + std::string("asked Windows to extend (rc ") + std::to_string(rc) + ")";
+        add_detail(detail, "asked Windows to extend (rc " + std::to_string(rc) + ")");
       }
-      Sleep(25);
+      wait_for_change();
     }
-    detail += "aborted";
+    add_detail(detail, "aborted");
+    return -1;
+  }
+
+  /// Waits until every target in `active` is active and none in `gone` is. -1 on timeout.
+  double wait_targets(const std::vector<target_ref_t> &active, const std::vector<target_ref_t> &gone, steady_t::time_point since, const options_t &o, std::string &detail) {
+    bool extended = false;
+    while (!g_abort) {
+      const auto now = active_targets();
+      const double elapsed = ms_between(since, steady_t::now());
+      std::size_t missing = 0;
+      std::size_t lingering = 0;
+      if (now) {
+        for (const auto &t : active) {
+          missing += contains(*now, t) ? 0 : 1;
+        }
+        for (const auto &t : gone) {
+          lingering += contains(*now, t) ? 1 : 0;
+        }
+        if (missing == 0 && lingering == 0) {
+          return elapsed;
+        }
+      }
+      if (elapsed > o.timeout_ms) {
+        add_detail(detail, "timeout: " + std::to_string(missing) + " display(s) not active, " + std::to_string(lingering) + " still active");
+        return -1;
+      }
+      if (!extended && missing != 0 && elapsed > o.extend_after_ms) {
+        extended = true;
+        const LONG rc = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_APPLY | SDC_TOPOLOGY_EXTEND);
+        add_detail(detail, "asked Windows to extend (rc " + std::to_string(rc) + ")");
+      }
+      wait_for_change();
+    }
+    add_detail(detail, "aborted");
     return -1;
   }
 
@@ -563,6 +727,10 @@ namespace {
     bool count_active = false;
     headless_t headless;
     bool headless_failed = false;
+    std::uint32_t physical_reactivations = 0;
+    const std::vector<target_ref_t> physical_targets = active_targets().value_or(std::vector<target_ref_t> {});
+    display_watch_t watch;
+    g_watch = &watch;
     {
       keepalive_t keepalive(backend, keepalive_errors);
       if (o.headless) {
@@ -572,7 +740,29 @@ namespace {
           g_abort = true;
         }
       }
-      auto timed = [&](const std::string &op, std::uint32_t n, std::uint32_t cycle, std::uint32_t index, std::size_t wanted, auto &&call) {
+      // Waits for the change an operation made: by target when the backend reports targets (exact even when Windows
+      // switches other displays on or off meanwhile), otherwise by the number of active paths.
+      using waiter_t = std::function<double(steady_t::time_point, std::string &)>;
+      auto by_count = [&](std::size_t wanted) -> waiter_t {
+        return [&o, wanted](steady_t::time_point t0, std::string &detail) {
+          return wait_active(wanted, t0, o, detail);
+        };
+      };
+      auto targets_of = [&](const std::vector<std::uint32_t> &hs, bool &all_known) {
+        std::vector<target_ref_t> out;
+        all_known = !hs.empty();
+        for (const auto h : hs) {
+          const auto t = backend.target_of(h);
+          if (t) {
+            out.push_back(*t);
+          } else {
+            all_known = false;
+          }
+        }
+        return out;
+      };
+
+      auto timed = [&](const std::string &op, std::uint32_t n, std::uint32_t cycle, std::uint32_t index, auto &&call, auto &&make_waiter) {
         event_t e;
         e.t_ms = ms_between(epoch, steady_t::now());
         e.op = op;
@@ -583,10 +773,22 @@ namespace {
         const status_t st = call();
         e.call_ms = ms_between(t0, steady_t::now());
         if (st) {
-          e.visible_ms = wait_active(wanted, t0, o, e.detail);
+          const waiter_t wait = make_waiter();
+          e.visible_ms = wait(t0, e.detail);
           e.ok = e.visible_ms >= 0;
         } else {
           e.detail = st.error().to_string();
+        }
+        if (o.headless && !physical_targets.empty()) {
+          // Windows applies its stored (or default "extend") topology for each new set of monitors, which can switch
+          // the physical displays back on; a headless host must re-apply its own topology after each change.
+          const auto now = active_targets();
+          if (now && std::any_of(physical_targets.begin(), physical_targets.end(), [&](const target_ref_t &t) {
+                return contains(*now, t);
+              })) {
+            ++physical_reactivations;
+            add_detail(e.detail, "Windows switched physical displays back on");
+          }
         }
         e.end_ms = ms_between(epoch, steady_t::now());
         events.push_back(e);
@@ -600,28 +802,53 @@ namespace {
         for (std::uint32_t c = 1; c <= o.cycles && !g_abort; ++c) {
           bool ok = true;
           if (o.batch) {
-            ok = timed("add_batch", n, c, n, base + n, [&] {
+            ok = timed("add_batch", n, c, n, [&] {
               return backend.add_batch(o.mode, n, handles);
+            }, [&]() -> waiter_t {
+              bool known = false;
+              const auto t = targets_of(handles, known);
+              if (known) {
+                return [&o, t](steady_t::time_point t0, std::string &detail) {
+                  return wait_targets(t, {}, t0, o, detail);
+                };
+              }
+              return by_count(base + n);
             });
             if (ok) {
               nap(o.hold_ms);
             }
             if (!handles.empty()) {
               const std::vector<std::uint32_t> all = handles;
+              bool known = false;
+              const auto t = targets_of(all, known);
               handles.clear();
-              ok = timed("remove_batch", n, c, n, base, [&] {
+              ok = timed("remove_batch", n, c, n, [&] {
                 return backend.remove_batch(all);
+              }, [&]() -> waiter_t {
+                if (known) {
+                  return [&o, t](steady_t::time_point t0, std::string &detail) {
+                    return wait_targets({}, t, t0, o, detail);
+                  };
+                }
+                return by_count(base);
               }) && ok;
             }
           } else if (backend.dynamic()) {
             for (std::uint32_t i = 1; i <= n && ok && !g_abort; ++i) {
-              ok = timed("add", n, c, i, base + i, [&]() -> status_t {
+              ok = timed("add", n, c, i, [&]() -> status_t {
                 auto h = backend.add(o.mode);
                 if (!h) {
                   return h.error();
                 }
                 handles.push_back(h.value());
                 return status_t::ok();
+              }, [&, i]() -> waiter_t {
+                if (const auto t = backend.target_of(handles.back()); t) {
+                  return [&o, t](steady_t::time_point t0, std::string &detail) {
+                    return wait_targets({*t}, {}, t0, o, detail);
+                  };
+                }
+                return by_count(base + i);
               });
             }
             if (ok) {
@@ -629,19 +856,31 @@ namespace {
             }
             for (std::uint32_t i = static_cast<std::uint32_t>(handles.size()); i >= 1 && !g_abort; --i) {
               const std::uint32_t h = handles.back();
+              const auto t = backend.target_of(h);
               handles.pop_back();
-              ok = timed("remove", n, c, i, base + i - 1, [&] {
+              ok = timed("remove", n, c, i, [&] {
                 return backend.remove(h);
+              }, [&, i]() -> waiter_t {
+                if (t) {
+                  return [&o, t](steady_t::time_point t0, std::string &detail) {
+                    return wait_targets({}, {*t}, t0, o, detail);
+                  };
+                }
+                return by_count(base + i - 1);
               }) && ok;
             }
           } else {
             count_active = true;
-            ok = timed("set_count", n, c, n, base + n, [&] {
+            ok = timed("set_count", n, c, n, [&] {
               return backend.set_count(n, o.mode);
+            }, [&] {
+              return by_count(base + n);
             });
             nap(o.hold_ms);
-            ok = timed("set_count", n, c, 0, base, [&] {
+            ok = timed("set_count", n, c, 0, [&] {
               return backend.set_count(0, o.mode);
+            }, [&] {
+              return by_count(base);
             }) && ok;
             count_active = !ok;
           }
@@ -656,6 +895,7 @@ namespace {
       cleanup(backend, handles, count_active, before.value(), physical, o);
     }
     probes.stop();
+    g_watch = nullptr;
     if (headless_failed) {
       return 1;
     }
@@ -663,7 +903,10 @@ namespace {
     std::error_code ec;
     fs::create_directories(o.out, ec);
     write_csv(o.out, events, probes);
-    const json s = summarize(o, &backend, events, probes, keepalive_errors, g_abort);
+    json s = summarize(o, &backend, events, probes, keepalive_errors, g_abort);
+    if (o.headless) {
+      s["physical_reactivations"] = physical_reactivations;
+    }
     std::ofstream(o.out / L"summary.json", std::ios::trunc) << s.dump(2) << '\n';
     std::printf("%s\n", s.dump(2).c_str());
     if (g_abort) {

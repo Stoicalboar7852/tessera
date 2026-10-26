@@ -107,6 +107,9 @@ try {
         $cer = Get-ChildItem C:\tessera\pkg\*.cer | Select-Object -First 1
         foreach ($s in 'Root', 'TrustedPublisher') { certutil -f -addstore $s $cer.FullName 2>&1 | Out-Null }
         & C:\tessera\vdd-install.exe remove --purge 2>&1 | Out-Null
+        # The driver's own TraceLogging events (provider Tessera.Vdd), for diagnosing hangs.
+        logman stop tessera-vdd -ets 2>&1 | Out-Null
+        logman create trace tessera-vdd -p '{9358308D-0904-440B-A1D9-2FB3E81370E5}' 0xffffffffffffffff 5 -o C:\tessera\tessera-vdd.etl -ets 2>&1 | Out-Null
         $r.install = (& C:\tessera\vdd-install.exe install C:\tessera\pkg\TesseraVdd.inf 2>&1 | Out-String).Trim()
         $r.install_exit = $LASTEXITCODE
         Start-Sleep -Seconds 5
@@ -128,6 +131,8 @@ try {
         $r.stress_one_tail = (($one.Out -split "`n") | Select-Object -Last 4) -join ' | '
         $batch = Invoke-Interactive "C:\tessera\vdd-stress.exe run --backend tessera --batch --counts $counts --cycles $cycles --hold-ms 1000 --settle-ms 300 --out C:\tessera\stress-batch"
         $r.stress_batch_exit = $batch.Exit
+        $hdr = Invoke-Interactive "C:\tessera\vdd-stress.exe run --backend tessera --hdr --counts 2 --cycles $cycles --hold-ms 1000 --settle-ms 300 --out C:\tessera\stress-hdr"
+        $r.stress_hdr_exit = $hdr.Exit
 
         # Ownership: kill a process that holds 2 monitors; the driver must remove them after the grace period.
         $hold = Invoke-Interactive 'C:\tessera\vdd-stress.exe hold --backend tessera --count 2 --seconds 120 --out C:\tessera\orphan' -NoWait
@@ -148,11 +153,22 @@ try {
             Where-Object { $_.Message -match 'WUDFHost|TesseraVdd' } | ForEach-Object { $_.TimeCreated.ToString('s') + ' ' + (($_.Message -split "`n")[0]) })
         $r.umdf_events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-DriverFrameworks-UserMode' } -MaxEvents 20 -ErrorAction SilentlyContinue |
             Where-Object { $_.Id -in 10110, 10111, 10114 } | ForEach-Object { "$($_.Id) " + (($_.Message -split "`n")[0]) })
-        $r.remove = (& C:\tessera\vdd-install.exe remove --purge 2>&1 | Out-String).Trim()
+        # Removal must finish promptly (it hung once on the dev PC after an HDR run).
+        $sw.Restart()
+        $p = Start-Process C:\tessera\vdd-install.exe -ArgumentList 'remove', '--purge' -PassThru -NoNewWindow -RedirectStandardOutput C:\tessera\remove.txt -RedirectStandardError C:\tessera\remove.err
+        $null = $p.Handle
+        $r.remove_finished = $p.WaitForExit(120000)
+        $r.remove_s = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        $r.remove = ((Get-Content C:\tessera\remove.txt, C:\tessera\remove.err -Raw -ErrorAction SilentlyContinue) -join ' ').Trim()
+        $dev = Get-PnpDevice | Where-Object HardwareID -contains 'Root\TesseraVdd'
+        $r.device_after_remove = if ($dev) { "$($dev.Status) problem=$($dev.Problem)" } else { 'gone' }
+        logman stop tessera-vdd -ets 2>&1 | Out-Null
+        New-Item -ItemType Directory -Force C:\tessera\trace | Out-Null
+        tracerpt C:\tessera\tessera-vdd.etl -o C:\tessera\trace\tessera-vdd.csv -of CSV -y 2>&1 | Out-Null
         [pscustomobject]$r
     }
 
-    foreach ($d in 'stress-one', 'stress-batch', 'orphan') {
+    foreach ($d in 'stress-one', 'stress-batch', 'stress-hdr', 'orphan', 'trace') {
         $files = Invoke-Command -Session $session -ArgumentList $d {
             param($d)
             Get-ChildItem "C:\tessera\$d" -File -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Text = (Get-Content $_.FullName -Raw) } }
@@ -169,6 +185,7 @@ try {
     # vdd-stress exits 1 when stalls exceed 250 ms, which a GPU-less VM always does; 0 or 1 means it completed.
     $ok = $r.secure_boot -and "$($r.install_exit)" -eq '0' -and $r.pnp_status -like 'OK*' -and $r.query -like '*interface v2*' -and
           $r.interactive_ready -and "$($r.stress_one_exit)" -in '0', '1' -and "$($r.stress_batch_exit)" -in '0', '1' -and
+          "$($r.stress_hdr_exit)" -in '0', '1' -and $r.remove_finished -and $r.device_after_remove -eq 'gone' -and
           (& $opsOk $one) -and (& $opsOk $batch) -and $r.orphan_active_before_kill -eq 2 -and $r.orphan_active_after -eq 0 -and
           $r.orphan_removed_after_s -ge 1.5 -and $r.orphan_removed_after_s -le 6 -and @($r.wudfhost_crashes).Count -eq 0
     Write-Host ($(if ($ok) { 'PASS: monitors are added and removed at runtime; orphaned monitors are removed after the grace period' } else { 'FAIL' }))

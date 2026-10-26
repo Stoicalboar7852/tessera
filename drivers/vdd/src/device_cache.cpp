@@ -4,6 +4,8 @@
  */
 #include "device_cache.h"
 
+#include <utility>
+
 #include "trace.h"
 
 using Microsoft::WRL::ComPtr;
@@ -30,6 +32,7 @@ namespace tessera::vdd {
     }
     if (i < count_) {
       out = entries_[i].device;
+      ++entries_[i].users;
     } else {
       // Created under the lock: monitors on the same GPU wait for the one device instead of each creating its own.
       hr = create(adapter, out);
@@ -37,6 +40,7 @@ namespace tessera::vdd {
         if (count_ < max_adapters) {
           entries_[count_].luid = adapter;
           entries_[count_].device = out;
+          entries_[count_].users = 1;
           ++count_;
         }
         TraceLoggingWrite(g_trace, "DeviceCreated", TraceLoggingUInt32(adapter.LowPart, "LuidLow"), TraceLoggingInt32(adapter.HighPart, "LuidHigh"));
@@ -46,10 +50,33 @@ namespace tessera::vdd {
     return hr;
   }
 
+  void device_cache_t::release(const LUID &adapter, IDXGIDevice *device) {
+    ComPtr<IDXGIDevice> last;  // destroyed outside the lock
+    AcquireSRWLockExclusive(&lock_);
+    for (unsigned i = 0; i < count_; ++i) {
+      if (same_luid(entries_[i].luid, adapter) && entries_[i].device.Get() == device) {
+        if (--entries_[i].users == 0) {
+          last = std::move(entries_[i].device);
+          entries_[i] = entries_[count_ - 1];
+          entries_[count_ - 1].device.Reset();
+          --count_;
+        }
+        break;
+      }
+    }
+    ReleaseSRWLockExclusive(&lock_);
+    if (last) {
+      last.Reset();
+      TraceLoggingWrite(g_trace, "DeviceReleased", TraceLoggingUInt32(adapter.LowPart, "LuidLow"), TraceLoggingInt32(adapter.HighPart, "LuidHigh"));
+    }
+  }
+
   void device_cache_t::invalidate(const LUID &adapter, IDXGIDevice *broken) {
+    ComPtr<IDXGIDevice> dropped;
     AcquireSRWLockExclusive(&lock_);
     for (unsigned i = 0; i < count_; ++i) {
       if (same_luid(entries_[i].luid, adapter) && entries_[i].device.Get() == broken) {
+        dropped = std::move(entries_[i].device);
         entries_[i] = entries_[count_ - 1];
         entries_[count_ - 1].device.Reset();
         --count_;
