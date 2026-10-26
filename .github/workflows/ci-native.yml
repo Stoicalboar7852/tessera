@@ -54,6 +54,7 @@ jobs:
           retention-days: 7
           path: |
             build/tools/recover/Release/*.exe
+            build/tools/vdd-stress/Release/*.exe
             build/host-helpers/agent/Release/*.exe
 
   mingw:

@@ -1,0 +1,56 @@
+{
+  "comment": "Third-party virtual display drivers used only to reproduce the multi-display freeze (Phase 1). Pinned by SHA-256; Run-VddRepro.ps1 refuses files that do not match. Packages are unpacked into <project>\\cache\\vdd-repro by Get-VddPackages.ps1.",
+  "drivers": [
+    {
+      "name": "parsec",
+      "title": "Parsec Virtual Display Adapter 0.45.0.0",
+      "hardware_id": "Root\\Parsec\\VDA",
+      "source": "https://builds.parsec.app/vdd/parsec-vdd-0.45.0.0.exe",
+      "source_sha256": "e23332448fdaf5aa017cb308db5ef6855fac526a7ded05d80c039404126d5362",
+      "dir": "parsec\\x\\driver",
+      "inf": "mm.inf",
+      "signer": "Microsoft Windows Hardware Compatibility Publisher (WHQL); installs without extra trust",
+      "files": {
+        "mm.inf": "34da9ff45c13577631f67e33d11b8a26e3d22ca685d00c388b6122a795800588",
+        "mm.dll": "96db6ae2f950b56e52be3e68f92893afa94645eae09fea2abd5dd1985758150a",
+        "mm.cat": "136e64ac07dce5a3b4935d5a9c5cfe03983c0b3065f46a30a45536d5b1681d5c"
+      }
+    },
+    {
+      "name": "sudovda",
+      "title": "SudoVDA 1.10.9.289 (from Apollo 0.4.6)",
+      "hardware_id": "Root\\SudoMaker\\SudoVDA",
+      "source": "https://github.com/ClassicOldSong/Apollo/releases/download/v0.4.6/Apollo-0.4.6.exe",
+      "source_sha256": "42b2aefaacb3474511517a56b96ee9f0517f30ac38b5dd2fda9fd5b478f5021a",
+      "dir": "apollo\\x\\drivers\\sudovda",
+      "inf": "SudoVDA.inf",
+      "signer": "self-signed CN=sudovda@su.mk (code signing only, not a CA); trusted in Root + TrustedPublisher for the run, as Apollo's installer does, then removed",
+      "trust_cert": "sudovda.cer",
+      "trust_thumbprint": "3C918FC73525AD8B1521B6DB26B71F694277CC49",
+      "files": {
+        "SudoVDA.inf": "ad69ac682756f0cf339b081fac7e6e8159fdf2ca01ca69df8945c7246c286925",
+        "SudoVDA.dll": "47ee263cb5de9382c6630a2d7f3dafec4a49419f953beec869ca5dd0c460ff63",
+        "sudovda.cat": "2f9189de5604bec9d86f51640cc540639e394d9ad0f8e689129375e95f2d22f8",
+        "sudovda.cer": "6accdcd519f6179d967db4eaa20ecf25a732ba30e87f4cffebc768b2c13c9007"
+      }
+    },
+    {
+      "name": "mtt",
+      "title": "MTT Virtual Display Driver 11.30.4.434 (release 25.7.23, driver-only package; predates the PR #482 swap-chain fix)",
+      "hardware_id": "Root\\MttVDD",
+      "source": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip",
+      "source_sha256": "e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a",
+      "dir": "mtt\\x\\VirtualDisplayDriver",
+      "inf": "MttVDD.inf",
+      "signer": "SignPath Foundation (publicly trusted Authenticode); its leaf certificate goes into TrustedPublisher for the run so the install is silent, then removed",
+      "trust_publisher_thumbprint": "3CF8CF26D8BA266C3A483AB7D26D4A818E317D76",
+      "settings": "vdd_settings.xml",
+      "files": {
+        "MttVDD.inf": "550d211fe481e74dfe3f9d724ed78be48b3a9113405965d683d9373e8d672f5d",
+        "MttVDD.dll": "c9ca837f57a98fbd43bc416a7f535a95843626e7759eaf85cf0cd7ce334dbb05",
+        "mttvdd.cat": "08a0093fc9b2e32b287a6f8a77ca4de0a31830d29fc33d2b13a918dc859468f6",
+        "vdd_settings.xml": "edb2501d6d5da17f66d15d4b97a6f4a3f0d8963165ac4a6a6259d95118288020"
+      }
+    }
+  ]
+}

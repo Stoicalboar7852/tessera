@@ -7,6 +7,8 @@
  *   vdd-install remove [--purge]                remove the device(s); --purge also deletes the driver package
  *   vdd-install status                          list devices, their state and problem code
  *   vdd-install query                           open the control interface and print the driver version
+ * `--hwid ID` (before or after the command) works on another root-enumerated display device instead, e.g. the
+ * third-party VDDs that tools/vdd-stress compares against (Root\SudoMaker\SudoVDA, Root\Parsec\VDA, Root\MttVDD).
  * Exit codes: 0 ok, 1 failure, 2 usage, 3 reboot required.
  */
 // standard includes
@@ -32,7 +34,7 @@ using namespace tessera;
 
 namespace {
 
-  constexpr wchar_t hardware_id[] = L"Root\\TesseraVdd";
+  std::wstring hardware_id = L"Root\\TesseraVdd";  ///< Replaced by --hwid.
 
   /// A zeroed SetupAPI struct with its cbSize set.
   template<class T>
@@ -75,7 +77,7 @@ namespace {
         continue;
       }
       for (const wchar_t *p = ids; *p != L'\0'; p += wcslen(p) + 1) {
-        if (_wcsicmp(p, hardware_id) == 0) {
+        if (_wcsicmp(p, hardware_id.c_str()) == 0) {
           ++count;
           fn(set.h, data);
           break;
@@ -109,7 +111,7 @@ namespace {
       return fail(n.error());
     }
     if (n.value() == 0) {
-      std::puts("no Tessera virtual display device");
+      std::printf("no device with hardware ID %s\n", win32::to_utf8(hardware_id).c_str());
     }
     return 0;
   }
@@ -134,8 +136,8 @@ namespace {
       if (!SetupDiCreateDeviceInfoW(set.h, L"Display", &GUID_DEVCLASS_DISPLAY, nullptr, nullptr, DICD_GENERATE_ID, &data)) {
         return fail(win32::last_error("SetupDiCreateDeviceInfoW"));
       }
-      const wchar_t ids[] = L"Root\\TesseraVdd\0";  // REG_MULTI_SZ, double NUL-terminated
-      if (!SetupDiSetDeviceRegistryPropertyW(set.h, &data, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids), sizeof(ids))) {
+      const std::wstring ids = hardware_id + L'\0';  // REG_MULTI_SZ: the string's own NUL plus this one
+      if (!SetupDiSetDeviceRegistryPropertyW(set.h, &data, SPDRP_HARDWAREID, reinterpret_cast<const BYTE *>(ids.c_str()), static_cast<DWORD>((ids.size() + 1) * sizeof(wchar_t)))) {
         return fail(win32::last_error("SetupDiSetDeviceRegistryPropertyW(HARDWAREID)"));
       }
       if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set.h, &data)) {
@@ -144,7 +146,7 @@ namespace {
       std::printf("created device %s\n", instance_id(set.h, data).c_str());
     }
     BOOL reboot = FALSE;
-    if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, hardware_id, full, INSTALLFLAG_FORCE, &reboot)) {
+    if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, hardware_id.c_str(), full, INSTALLFLAG_FORCE, &reboot)) {
       return fail(win32::last_error("UpdateDriverForPlugAndPlayDevicesW", full));
     }
     std::printf("driver installed from %s%s\n", win32::to_utf8(full).c_str(), reboot ? " (reboot required)" : "");
@@ -198,7 +200,7 @@ namespace {
       }
     }
     if (n.value() == 0) {
-      std::puts("no Tessera virtual display device");
+      std::printf("no device with hardware ID %s\n", win32::to_utf8(hardware_id).c_str());
     }
     return failures ? 1 : (reboot_needed ? 3 : 0);
   }
@@ -238,27 +240,35 @@ namespace {
   }
 
   void usage() {
-    std::puts("Usage: vdd-install install <TesseraVdd.inf> | remove [--purge] | status | query");
+    std::puts("Usage: vdd-install [--hwid ID] install <file.inf> | remove [--purge] | status | query");
   }
 
 }  // namespace
 
 int wmain(int argc, wchar_t **argv) {
-  if (argc < 2) {
+  std::vector<std::wstring> args;
+  for (int i = 1; i < argc; ++i) {
+    if (std::wstring(argv[i]) == L"--hwid" && i + 1 < argc) {
+      hardware_id = argv[++i];
+    } else {
+      args.emplace_back(argv[i]);
+    }
+  }
+  if (args.empty() || hardware_id.empty() || hardware_id.size() > 200) {
     usage();
     return 2;
   }
-  const std::wstring cmd = argv[1];
-  if (cmd == L"install" && argc == 3) {
-    return cmd_install(argv[2]);
+  const std::wstring &cmd = args[0];
+  if (cmd == L"install" && args.size() == 2) {
+    return cmd_install(args[1]);
   }
-  if (cmd == L"remove" && (argc == 2 || (argc == 3 && std::wstring(argv[2]) == L"--purge"))) {
-    return cmd_remove(argc == 3);
+  if (cmd == L"remove" && (args.size() == 1 || (args.size() == 2 && args[1] == L"--purge"))) {
+    return cmd_remove(args.size() == 2);
   }
-  if (cmd == L"status" && argc == 2) {
+  if (cmd == L"status" && args.size() == 1) {
     return cmd_status();
   }
-  if (cmd == L"query" && argc == 2) {
+  if (cmd == L"query" && args.size() == 1) {
     return cmd_query();
   }
   usage();

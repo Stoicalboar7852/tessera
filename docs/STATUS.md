@@ -5,7 +5,19 @@ _Last updated: 2026-10-26 (after the Windows reinstall)_
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress** (go-ahead 2026-10-26): freeze research and reproduction tooling | The Phase 1 design comes before any driver code, for approval. |
+| 1 – VDD | **In progress** (go-ahead 2026-10-26). Freeze analysis drafted, reproduction tooling built; **waiting for** the elevated reproduction run and **approval of `docs/phase-1-design.md`** | No driver code before the design is approved. |
+
+## Phase 1 progress
+- `docs/vdd-freeze-analysis.md` covers source review of SudoVDA and MTT VDD, the parsec-vdd control API, and issue
+  trackers. **Confirmed:** MTT VDD's multi-monitor collapse is a single-swap-chain-worker thrash (fixed upstream in PR
+  #482, but the latest release still ships the old driver). Other contributors: per-assignment D3D device creation,
+  large mode lists, whole-adapter restarts, all-or-nothing keepalive watchdogs, and Windows' own per-arrival cost.
+- `tools/vdd-stress` (`vdd-stress.exe` with SudoVDA, parsec-vdd and MTT backends and stall probes), `Get-VddPackages.ps1`
+  (pinned, hash-checked packages) and `Run-VddRepro.ps1` (elevated, unattended, resumable, WPR-traced). The
+  harness was smoke-tested unelevated: staging, hash checks, baseline, crash-resume, failure cleanup and results.
+- `vdd-install --hwid` installs other root-enumerated VDDs, so no nefconc download is needed.
+- Baseline on the dev PC without a VDD: compose max 18 ms, ui 0.4 ms, sched 2.9 ms.
+- `docs/phase-1-design.md`: the proposed driver design, waiting for approval.
 | 2–12 | Not started | |
 
 ## Phase 0 acceptance

@@ -23,6 +23,7 @@ include(cmake/tessera_compile_options.cmake)
 add_subdirectory(host-helpers)
 add_subdirectory(tools/recover)
 add_subdirectory(tools/vdd-install)
+add_subdirectory(tools/vdd-stress)
 
 if(TESSERA_BUILD_TESTS)
   enable_testing()

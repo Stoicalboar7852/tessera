@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Display-stack events for the VDD freeze reproduction. Recorded together with the built-in GPU.light and
+  CPU.light profiles:  wpr -start GPU.light -start CPU.light -start tessera-display.wprp!TesseraDisplay -filemode
+-->
+<WindowsPerformanceRecorder Version="1.0" Author="Tessera" Comments="IddCx, display configuration, PnP and UMDF events">
+  <Profiles>
+    <EventCollector Id="EventCollector_TesseraDisplay" Name="Tessera display events">
+      <BufferSize Value="1024" />
+      <Buffers Value="64" />
+    </EventCollector>
+
+    <!-- Microsoft-Windows-IndirectDisplays-ClassExtension-Events (IddCx) -->
+    <EventProvider Id="Provider_IddCx" Name="966CD1C0-3F69-42AD-9877-517DCE8462B4" />
+    <!-- Microsoft-Windows-Display -->
+    <EventProvider Id="Provider_Display" Name="6ECE3302-FEE1-4EA9-8B88-086D459ED976" />
+    <!-- Microsoft-Windows-DisplaySwitch -->
+    <EventProvider Id="Provider_DisplaySwitch" Name="192EDE41-9175-4C86-AC02-9D003C9D43AB" />
+    <!-- Microsoft-Windows-Kernel-PnP -->
+    <EventProvider Id="Provider_KernelPnP" Name="9C205A39-1250-487D-ABD7-E831C6290539" />
+    <!-- Microsoft-Windows-DriverFrameworks-UserMode (UMDF host) -->
+    <EventProvider Id="Provider_UMDF" Name="2E35AAEB-857F-4BEB-A418-2E6C0E54D988" />
+
+    <Profile Id="TesseraDisplay.Verbose.File" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="File" DetailLevel="Verbose">
+      <Collectors>
+        <EventCollectorId Value="EventCollector_TesseraDisplay">
+          <EventProviders>
+            <EventProviderId Value="Provider_IddCx" />
+            <EventProviderId Value="Provider_Display" />
+            <EventProviderId Value="Provider_DisplaySwitch" />
+            <EventProviderId Value="Provider_KernelPnP" />
+            <EventProviderId Value="Provider_UMDF" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+
+    <Profile Id="TesseraDisplay.Light.File" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="File" DetailLevel="Light" Base="TesseraDisplay.Verbose.File" />
+  </Profiles>
+</WindowsPerformanceRecorder>
