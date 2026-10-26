@@ -11,15 +11,15 @@
     </EventCollector>
 
     <!-- Microsoft-Windows-IndirectDisplays-ClassExtension-Events (IddCx) -->
-    <EventProvider Id="Provider_IddCx" Name="966CD1C0-3F69-42AD-9877-517DCE8462B4" />
+    <EventProvider Id="Provider_IddCx" Name="966CD1C0-3F69-42AD-9877-517DCE8462B4" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
     <!-- Microsoft-Windows-Display -->
-    <EventProvider Id="Provider_Display" Name="6ECE3302-FEE1-4EA9-8B88-086D459ED976" />
+    <EventProvider Id="Provider_Display" Name="6ECE3302-FEE1-4EA9-8B88-086D459ED976" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
     <!-- Microsoft-Windows-DisplaySwitch -->
-    <EventProvider Id="Provider_DisplaySwitch" Name="192EDE41-9175-4C86-AC02-9D003C9D43AB" />
+    <EventProvider Id="Provider_DisplaySwitch" Name="192EDE41-9175-4C86-AC02-9D003C9D43AB" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
     <!-- Microsoft-Windows-Kernel-PnP -->
-    <EventProvider Id="Provider_KernelPnP" Name="9C205A39-1250-487D-ABD7-E831C6290539" />
+    <EventProvider Id="Provider_KernelPnP" Name="9C205A39-1250-487D-ABD7-E831C6290539" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
     <!-- Microsoft-Windows-DriverFrameworks-UserMode (UMDF host) -->
-    <EventProvider Id="Provider_UMDF" Name="2E35AAEB-857F-4BEB-A418-2E6C0E54D988" />
+    <EventProvider Id="Provider_UMDF" Name="2E35AAEB-857F-4BEB-A418-2E6C0E54D988" Level="5"><Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF" /></Keywords></EventProvider>
 
     <Profile Id="TesseraDisplay.Verbose.File" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="File" DetailLevel="Verbose">
       <Collectors>
