@@ -63,7 +63,8 @@ $guestHelpers = {
         $out = "C:\tessera\it-$id.txt"
         $done = "$out.done"
         $script = "C:\tessera\it-$id.cmd"
-        [IO.File]::WriteAllText($script, "@echo off`r`n$command > `"$out`" 2>&1`r`necho %ERRORLEVEL%> `"$done`"`r`n")
+        # "(echo N)>" and not "echo N>": cmd would read "0>" as a redirection of handle 0.
+        [IO.File]::WriteAllText($script, "@echo off`r`n$command > `"$out`" 2>&1`r`n(echo %ERRORLEVEL%)> `"$done`"`r`n")
         $task = "TesseraInteractive-$id"
         $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$script`""
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
@@ -72,8 +73,13 @@ $guestHelpers = {
         Start-ScheduledTask -TaskName $task
         if ($NoWait) { return [pscustomobject]@{ Task = $task; Out = $out; Done = $done } }
         $deadline = (Get-Date).AddSeconds($timeoutSec)
-        while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-        $exit = if (Test-Path $done) { [int]((Get-Content $done -Raw).Trim()) } else { 'timeout' }
+        $code = ''
+        # The file appears before the exit code is written into it, so wait for its content.
+        while (-not $code -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            $code = "$(Get-Content $done -Raw -ErrorAction SilentlyContinue)".Trim()
+        }
+        $exit = if ($code -match '^-?\d+$') { [int]$code } else { 'timeout' }
         Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
         [pscustomobject]@{ Exit = $exit; Out = (Get-Content $out -Raw -ErrorAction SilentlyContinue) }
     }
@@ -160,7 +166,9 @@ try {
     $one = & $summary 'stress-one'
     $batch = & $summary 'stress-batch'
     $opsOk = { param($s) $s -and @($s.operations | Where-Object { $_.failed -gt 0 -or $_.timeouts -gt 0 }).Count -eq 0 }
+    # vdd-stress exits 1 when stalls exceed 250 ms, which a GPU-less VM always does; 0 or 1 means it completed.
     $ok = $r.secure_boot -and "$($r.install_exit)" -eq '0' -and $r.pnp_status -like 'OK*' -and $r.query -like '*interface v2*' -and
+          $r.interactive_ready -and "$($r.stress_one_exit)" -in '0', '1' -and "$($r.stress_batch_exit)" -in '0', '1' -and
           (& $opsOk $one) -and (& $opsOk $batch) -and $r.orphan_active_before_kill -eq 2 -and $r.orphan_active_after -eq 0 -and
           $r.orphan_removed_after_s -ge 1.5 -and $r.orphan_removed_after_s -le 6 -and @($r.wudfhost_crashes).Count -eq 0
     Write-Host ($(if ($ok) { 'PASS: monitors are added and removed at runtime; orphaned monitors are removed after the grace period' } else { 'FAIL' }))

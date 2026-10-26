@@ -15,8 +15,17 @@ _Last updated: 2026-10-27_
   add, whatever the driver does.
 - **Design** approved on 2026-10-27 (`docs/phase-1-design.md`), including handle-owned monitors that are removed
   2 s after the handle closes. Licence: ADR 0005.
-- **Driver** (`drivers/vdd`, IddCx 1.10, 1.4 minimum): builds with the EWDK at `/W4 /WX` and is dev-signed; not yet
-  run. It has:
+- **Driver verified in the Secure Boot VM** (2026-10-27, `tools/vm/Test-VddMonitorsInVm.ps1`: PASS, Windows 11 Pro
+  26300, no GPU):
+  - installs dev-signed with Secure Boot on;
+  - adds and removes 1, 2 and 4 monitors one at a time and batched, every operation successful; changes are
+    visible in 26–237 ms;
+  - after a holder process is killed, its 2 monitors are removed in 2.07 s (the 2 s grace period);
+  - no WUDFHost crash or UMDF host failure.
+
+  The VM composes in software (about 280 ms stalls even when idle), so its timings are not performance results.
+  CI builds the driver, the native components (MSVC and MinGW) and the host.
+- **Driver** (`drivers/vdd`, IddCx 1.10, 1.4 minimum): builds with the EWDK at `/W4 /WX` and is dev-signed. It has:
   - runtime add/remove of up to 16 monitors over interface v2;
   - one event-driven worker per monitor and one D3D device per GPU;
   - handle ownership with a 2 s grace period;
@@ -28,7 +37,8 @@ _Last updated: 2026-10-27_
   - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 2 h);
   - `Run-VddRepro.ps1` and `Get-VddPackages.ps1` cover the third-party reproduction;
   - `tools/vm/Test-VddMonitorsInVm.ps1` checks the driver in the Secure Boot VM.
-- **Open:** VM test, dev-PC acceptance run (needs an elevated start), `docs/perf.md` numbers, Phase 1 summary.
+- **Open:** the dev-PC acceptance run (`tools/vdd-stress/Run-VddAcceptance.ps1`, needs an elevated start), the
+  `docs/perf.md` numbers, and the Phase 1 summary.
 
 ## Phase 0 acceptance
 
