@@ -120,11 +120,10 @@ namespace tessera::vdd {
   }
 
   NTSTATUS adapter_t::initialize() {
-    if (IDD_IS_FUNCTION_AVAILABLE(IddCxGetVersion)) {
-      IDARG_OUT_GETVERSION v = {};
-      if (NT_SUCCESS(IddCxGetVersion(&v))) {
-        iddcx_version_ = v.IddCxVersion;
-      }
+    // IddCxGetVersion is part of the IddCx 1.4 baseline this driver requires.
+    IDARG_OUT_GETVERSION v = {};
+    if (NT_SUCCESS(IddCxGetVersion(&v))) {
+      iddcx_version_ = v.IddCxVersion;
     }
     WDF_TIMER_CONFIG config;
     WDF_TIMER_CONFIG_INIT(&config, evt_orphan_timer);

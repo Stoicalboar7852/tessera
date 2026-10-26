@@ -1,24 +1,34 @@
 # Project status: Tessera
 
-_Last updated: 2026-10-26 (after the Windows reinstall)_
+_Last updated: 2026-10-27_
 
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress** (go-ahead 2026-10-26). Freeze analysis drafted, reproduction tooling built; **waiting for** the elevated reproduction run and **approval of `docs/phase-1-design.md`** | No driver code before the design is approved. |
+| 1 – VDD | **In progress.** Design approved 2026-10-27; driver implemented; VM test and dev-PC acceptance run pending | See "Phase 1 progress". |
+| 2–12 | Not started | |
 
 ## Phase 1 progress
-- `docs/vdd-freeze-analysis.md` covers source review of SudoVDA and MTT VDD, the parsec-vdd control API, and issue
-  trackers. **Confirmed:** MTT VDD's multi-monitor collapse is a single-swap-chain-worker thrash (fixed upstream in PR
-  #482, but the latest release still ships the old driver). Other contributors: per-assignment D3D device creation,
-  large mode lists, whole-adapter restarts, all-or-nothing keepalive watchdogs, and Windows' own per-arrival cost.
-- `tools/vdd-stress` (`vdd-stress.exe` with SudoVDA, parsec-vdd and MTT backends and stall probes), `Get-VddPackages.ps1`
-  (pinned, hash-checked packages) and `Run-VddRepro.ps1` (elevated, unattended, resumable, WPR-traced). The
-  harness was smoke-tested unelevated: staging, hash checks, baseline, crash-resume, failure cleanup and results.
-- `vdd-install --hwid` installs other root-enumerated VDDs, so no nefconc download is needed.
-- Baseline on the dev PC without a VDD: compose max 18 ms, ui 0.4 ms, sched 2.9 ms.
-- `docs/phase-1-design.md`: the proposed driver design, waiting for approval.
-| 2–12 | Not started | |
+- **Freeze analysis** (`docs/vdd-freeze-analysis.md`): source and issue-tracker review, plus measurements on the
+  dev PC. The freeze reproduces with all three drivers: compose stalls of up to 77 s (SudoVDA) and 121 s (MTT), and
+  MTT's host uses 89 % of a core with 4 idle displays. Windows itself costs up to ~300 ms of compositor stall per
+  add, whatever the driver does.
+- **Design** approved on 2026-10-27 (`docs/phase-1-design.md`), including handle-owned monitors that are removed
+  2 s after the handle closes. Licence: ADR 0005.
+- **Driver** (`drivers/vdd`, IddCx 1.10, 1.4 minimum): builds with the EWDK at `/W4 /WX` and is dev-signed; not yet
+  run. It has:
+  - runtime add/remove of up to 16 monitors over interface v2;
+  - one event-driven worker per monitor and one D3D device per GPU;
+  - handle ownership with a 2 s grace period;
+  - at most 6 modes per monitor, a generated EDID, and HDR only where requested.
+- **Shared code:** `tessera/display_modes.h` (CVT-RB timings, mode lists, EDID; 11 unit tests) and
+  `tessera/vdd_client.h` (control client).
+- **Tools:**
+  - `vdd-stress` has a `tessera` backend and the `--batch`, `--headless` and `--hdr` options;
+  - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 2 h);
+  - `Run-VddRepro.ps1` and `Get-VddPackages.ps1` cover the third-party reproduction;
+  - `tools/vm/Test-VddMonitorsInVm.ps1` checks the driver in the Secure Boot VM.
+- **Open:** VM test, dev-PC acceptance run (needs an elevated start), `docs/perf.md` numbers, Phase 1 summary.
 
 ## Phase 0 acceptance
 

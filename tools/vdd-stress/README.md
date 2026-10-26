@@ -1,27 +1,36 @@
 # vdd-stress
 
 Adds and removes virtual displays in cycles, times every change, and watches for system-wide stalls meanwhile. In
-Phase 1 it reproduces the multi-display freeze with third-party drivers (`docs/vdd-freeze-analysis.md`). Once Tessera's
-driver has a backend, it becomes that driver's acceptance test (brief §4.5).
+Phase 1 it reproduced the multi-display freeze with third-party drivers (`docs/vdd-freeze-analysis.md`). With the
+`tessera` backend it is the acceptance test for Tessera's own driver (brief §4.5).
 
 | File | What it is |
 |---|---|
-| `src/` | `vdd-stress.exe` (C++20, MSVC and MinGW). Backends: `sudovda`, `parsec`, `mtt` |
+| `src/` | `vdd-stress.exe` (C++20, MSVC and MinGW). Backends: `tessera`, `sudovda`, `parsec`, `mtt` |
+| `Run-VddAcceptance.ps1` | The elevated, unattended, resumable Phase 1 acceptance run for Tessera's driver |
 | `third-party-vdds.json` | The pinned third-party packages: sources and SHA-256 of every file |
 | `Get-VddPackages.ps1` | Downloads and unpacks those packages into `<project>\cache\vdd-repro` (no elevation) |
-| `Run-VddRepro.ps1` | The elevated, unattended, resumable reproduction run for all three drivers |
-| `tessera-display.wprp` | WPR profile with IddCx, Display, DisplaySwitch, Kernel-PnP and UMDF events |
+| `Run-VddRepro.ps1` | The elevated, unattended, resumable reproduction run for the three third-party drivers |
+| `tessera-display.wprp` | WPR profile with IddCx, Display, DisplaySwitch, Kernel-PnP and UMDF events (ring buffer) |
 
 ## vdd-stress.exe
 
 ```
-vdd-stress run   --backend sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10] [--mode 1920x1080@60]
+vdd-stress run   --backend tessera|sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10] [--mode 1920x1080@60]
                  [--hold-ms 2000] [--settle-ms 500] [--timeout-ms 10000] [--out DIR]
+                 [--batch] [--headless] [--hdr]
 vdd-stress hold  --backend B --count N --seconds S [--out DIR]
 vdd-stress probe --seconds S [--out DIR]          baseline without any driver (no elevation needed)
 vdd-stress save FILE | restore FILE               display layout as JSON
 ```
 
+- **Options:**
+  - `--batch` adds all displays of a cycle in one driver request and removes them in one (tessera only). It shows
+    what batching saves compared with one display at a time.
+  - `--headless` adds one extra "anchor" display, then switches the physical displays off through the state journal
+    (`journaled_display_change`), so `recover.exe --restore` can undo it if the run dies. It switches them back on at
+    the end. The cycles then run with no physical output active.
+  - `--hdr` adds HDR10 monitors (tessera, driver on IddCx 1.10 or later).
 - **What it measures:**
   - **Change time:** from the driver call until the CCD topology shows the display as active (add) or gone (remove).
   - **Stalls:** three probes run during the whole run. `compose` redraws a 4×4 topmost window in the bottom-right
@@ -33,10 +42,22 @@ vdd-stress save FILE | restore FILE               display layout as JSON
   brief's limits (each change < 3 s, no stall > 250 ms, no hang). Exit code 0 means the targets were met, 1 missed or
   failed, 2 usage error, 3 aborted.
 - **Clean-up:** displays it added are removed and the layout from before the run is restored, also after Ctrl+C. If
-  the process is killed, SudoVDA and parsec-vdd drop their displays on their own (keepalive). MTT keeps them until
-  its device is disabled.
+  the process is killed:
+  - Tessera's driver removes its monitors 2 s after the handle closes.
+  - SudoVDA and parsec-vdd drop their displays on their own (keepalive).
+  - MTT keeps them until its device is disabled.
 
-## Reproduction run
+## Acceptance run (Tessera VDD, dev PC)
+
+```
+powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stress\Run-VddAcceptance.ps1"   # elevated
+```
+
+Needs the driver package built and signed (`tools/signing/Sign-DriverPackage.ps1`) with a certificate trusted by
+`tools/setup/admin-once.ps1`. It takes about two hours. Output goes to `<project>\logs\vdd-accept\<timestamp>\`, with
+`results.md` as the overview. The script header lists the steps.
+
+## Reproduction run (third-party drivers)
 
 ```
 .\tools\vdd-stress\Get-VddPackages.ps1                     # once, unelevated

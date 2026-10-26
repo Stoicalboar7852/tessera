@@ -41,20 +41,40 @@ while (-not $session) {
     }
 }
 
+# PowerShell Direct answers before the autologon desktop exists; interactive-session tasks only run after it.
+# Wait for Explorer and for first-boot servicing (TiWorker) to finish.
+$settleDeadline = (Get-Date).AddMinutes(30)
+do {
+    $state = Invoke-Command -Session $session { [pscustomobject]@{
+        up = ((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
+        explorer = [bool](Get-Process explorer -ErrorAction SilentlyContinue)
+        servicing = [bool](Get-Process TiWorker -ErrorAction SilentlyContinue) } }
+    $settled = $state.explorer -and $state.up -gt 90 -and -not $state.servicing
+    if (-not $settled) { Start-Sleep -Seconds 20 }
+} until ($settled -or (Get-Date) -gt $settleDeadline)
+if (-not $settled) { throw 'the guest desktop did not settle (no Explorer, or servicing still running) within 30 min' }
+
 $guestHelpers = {
     # Runs a command in the interactive (autologon) session through a scheduled task and waits for it.
-    function Invoke-Interactive([string]$command, [int]$timeoutSec = 600, [switch]$NoWait) {
-        $out = "C:\tessera\it-$([guid]::NewGuid().ToString('N')).txt"
-        $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $command > `"$out`" 2>&1"
+    # Each call has its own task and a batch file that records the exit code in <out>.done when the command has
+    # finished, so the wait does not depend on when the scheduler reports the task as running.
+    function Invoke-Interactive([string]$command, [int]$timeoutSec = 900, [switch]$NoWait) {
+        $id = [guid]::NewGuid().ToString('N')
+        $out = "C:\tessera\it-$id.txt"
+        $done = "$out.done"
+        $script = "C:\tessera\it-$id.cmd"
+        [IO.File]::WriteAllText($script, "@echo off`r`n$command > `"$out`" 2>&1`r`necho %ERRORLEVEL%> `"$done`"`r`n")
+        $task = "TesseraInteractive-$id"
+        $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$script`""
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-        Register-ScheduledTask -TaskName 'TesseraInteractive' -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-        Start-ScheduledTask -TaskName 'TesseraInteractive'
-        if ($NoWait) { return $out }
+        Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+        Start-ScheduledTask -TaskName $task
+        if ($NoWait) { return [pscustomobject]@{ Task = $task; Out = $out; Done = $done } }
         $deadline = (Get-Date).AddSeconds($timeoutSec)
-        do { Start-Sleep -Milliseconds 500 } while ((Get-ScheduledTask -TaskName 'TesseraInteractive').State -eq 'Running' -and (Get-Date) -lt $deadline)
-        $exit = (Get-ScheduledTaskInfo -TaskName 'TesseraInteractive').LastTaskResult
-        Unregister-ScheduledTask -TaskName 'TesseraInteractive' -Confirm:$false
+        while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+        $exit = if (Test-Path $done) { [int]((Get-Content $done -Raw).Trim()) } else { 'timeout' }
+        Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
         [pscustomobject]@{ Exit = $exit; Out = (Get-Content $out -Raw -ErrorAction SilentlyContinue) }
     }
     # Active monitors as the driver reports them ("monitors N/16"), -1 if the query fails.
@@ -87,6 +107,13 @@ try {
         $dev = Get-PnpDevice -PresentOnly | Where-Object HardwareID -contains 'Root\TesseraVdd'
         $r.pnp_status = if ($dev) { "$($dev.Status) problem=$($dev.Problem)" } else { 'not present' }
         $r.query = (& C:\tessera\vdd-install.exe query 2>&1 | Out-String).Trim()
+        # 0x41303 (SCHED_S_TASK_HAS_NOT_RUN): the interactive session is not ready yet; retry for a while.
+        for ($i = 0; $i -lt 12; $i++) {
+            $probe = Invoke-Interactive 'echo ready' 60
+            if ($probe.Exit -eq 0) { break }
+            Start-Sleep -Seconds 10
+        }
+        $r.interactive_ready = $probe.Exit -eq 0
         $r.layout_before = (Invoke-Interactive 'C:\tessera\topoctl.exe show').Out
 
         # Runtime add/remove, one at a time and batched.
@@ -97,7 +124,7 @@ try {
         $r.stress_batch_exit = $batch.Exit
 
         # Ownership: kill a process that holds 2 monitors; the driver must remove them after the grace period.
-        $null = Invoke-Interactive 'C:\tessera\vdd-stress.exe hold --backend tessera --count 2 --seconds 120 --out C:\tessera\orphan' -NoWait
+        $hold = Invoke-Interactive 'C:\tessera\vdd-stress.exe hold --backend tessera --count 2 --seconds 120 --out C:\tessera\orphan' -NoWait
         $sw = [Diagnostics.Stopwatch]::StartNew()
         while ((Get-ActiveMonitors) -lt 2 -and $sw.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Milliseconds 200 }
         $r.orphan_active_before_kill = Get-ActiveMonitors
@@ -107,7 +134,8 @@ try {
         while ((Get-ActiveMonitors) -gt 0 -and $sw.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 100 }
         $r.orphan_removed_after_s = [math]::Round($sw.Elapsed.TotalSeconds, 2)
         $r.orphan_active_after = Get-ActiveMonitors
-        Unregister-ScheduledTask -TaskName 'TesseraInteractive' -Confirm:$false -ErrorAction SilentlyContinue
+        $r.orphan_hold_output = (Get-Content $hold.Out -Raw -ErrorAction SilentlyContinue)
+        Unregister-ScheduledTask -TaskName $hold.Task -Confirm:$false -ErrorAction SilentlyContinue
 
         $r.layout_after = (Invoke-Interactive 'C:\tessera\topoctl.exe show').Out
         $r.wudfhost_crashes = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error' } -MaxEvents 20 -ErrorAction SilentlyContinue |
