@@ -9,16 +9,25 @@
   Runs inside the EWDK environment (Inf2Cat, InfVerif and signtool come from the WDK).
 
 .EXAMPLE
-  .\tools\signing\Sign-DriverPackage.ps1 -BuildDir T:\build\vdd\x64\Release -Thumbprint 1265345C...
+  .\tools\signing\Sign-DriverPackage.ps1 -BuildDir T:\build\vdd\x64\Release
+  Without -Thumbprint, the newest code-signing certificate named "Tessera Dev Driver Signing" in
+  CurrentUser\My is used (the certificate is recreated after every Windows reinstall).
 #>
 param(
     [Parameter(Mandatory)] [string]$BuildDir,
-    [string]$Thumbprint = '1265345CE0C4B20790063F3999873002D93FAD2A',
+    [string]$Thumbprint,
     [string]$OutDir = (Join-Path $BuildDir 'package')
 )
 $ErrorActionPreference = 'Stop'
-$cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
-if (-not $cert) { throw "signing certificate $Thumbprint not found in CurrentUser\My" }
+if (-not $Thumbprint) {
+    $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+        Where-Object Subject -like 'CN=Tessera Dev Driver Signing*' | Sort-Object NotBefore -Descending | Select-Object -First 1
+    if (-not $cert) { throw 'no "Tessera Dev Driver Signing" certificate in CurrentUser\My (see tools/setup/README.md)' }
+    $Thumbprint = $cert.Thumbprint
+} else {
+    $cert = Get-Item "Cert:\CurrentUser\My\$Thumbprint" -ErrorAction SilentlyContinue
+    if (-not $cert) { throw "signing certificate $Thumbprint not found in CurrentUser\My" }
+}
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 foreach ($f in 'TesseraVdd.dll', 'TesseraVdd.inf') {

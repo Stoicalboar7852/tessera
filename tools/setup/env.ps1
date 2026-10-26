@@ -7,7 +7,7 @@
   - Maps T: to the project folder (subst), because MSYS2 and the Android NDK cannot handle the space in
     "D:\Remote streaming". subst is per logon session, so this is re-run in every new session.
   - Points package-manager caches at T:\cache, because C: is nearly full.
-  - Puts the portable tools (gh) on PATH.
+  - Puts the portable tools (git, gh) on PATH.
   Skips the subst when -Root has no space or is on NTFS and the caller passes -NoSubst.
 #>
 param(
@@ -30,7 +30,9 @@ $env:PIP_CACHE_DIR = Join-Path $cache 'pip'
 $env:UV_CACHE_DIR = Join-Path $cache 'uv'
 $env:NUGET_PACKAGES = Join-Path $cache 'nuget'
 
-$gh = Join-Path $base 'toolchain\gh\bin'
-if ((Test-Path $gh) -and ($env:PATH -notlike "*$gh*")) { $env:PATH = "$gh;$env:PATH" }
+foreach ($tool in 'toolchain\gh\bin', 'toolchain\git\cmd') {
+    $dir = Join-Path $base $tool
+    if ((Test-Path $dir) -and ($env:PATH -notlike "*$dir*")) { $env:PATH = "$dir;$env:PATH" }
+}
 
 Write-Host "Tessera environment: repo $base\src, toolchain $base\toolchain, caches $cache"

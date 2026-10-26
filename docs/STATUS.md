@@ -1,11 +1,12 @@
 # Project status: Tessera
 
-_Last updated: 2026-10-26_
+_Last updated: 2026-10-26 (after the Windows reinstall)_
 
 | Phase | State | Notes |
 |---|---|---|
-| 0 – Research and setup | **Done**, waiting for the owner's go-ahead for Phase 1 | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1–12 | Not started | |
+| 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
+| 1 – VDD | **In progress** (go-ahead 2026-10-26): freeze research and reproduction tooling | The Phase 1 design comes before any driver code, for approval. |
+| 2–12 | Not started | |
 
 ## Phase 0 acceptance
 
@@ -58,8 +59,12 @@ _Last updated: 2026-10-26_
 - D: is exFAT, so the dev environment uses `subst T:`, the EWDK, and repaired MSYS2 hard links (ADR 0004).
 
 ## Dev PC notes
-- Windows 11 Pro 26200; AMD iGPU + RTX 4060 Ti; Dell P2417H + H32S17; MTT, Parsec and "Virtual Desktop" VDDs
-  installed. Secure Boot off. C: has ~17 GB free.
+- **Reinstalled 2026-10-26** as Windows 11 IoT Enterprise LTSC 2024 (26100); same hardware and BIOS settings. Ryzen 5
+  7600X (AMD iGPU) + RTX 4060 Ti; Dell P2417H + H32S17. No third-party VDDs installed any more. C: now has ~420 GB
+  free. The developer account is a local admin (UAC). The hypervisor is running (VBS). Redo checklist:
+  `tools/setup/README.md`.
+- Before the reinstall: Windows 11 Pro 26200 with MTT, Parsec and "Virtual Desktop" VDDs, Secure Boot off, ~17 GB free
+  on C:.
 - **Stability:** 7 unexpected restarts in 14 days, including 2 during this work (2026-10-26 06:12 and 06:29, no bugcheck
   recorded). Earlier crashes had bugchecks 0x1C7, 0x3B and 0x1E (2026-10-07/20/22/24), before this project started.
   These patterns usually point to memory instability or a faulty kernel driver. Worth checking before Phase 1, which
