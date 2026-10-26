@@ -5,7 +5,11 @@
  *
  *   vdd-stress run   --backend B [--counts 1,2,4,8] [--cycles 10] [--mode 1920x1080@60] [--hold-ms 2000]
  *                    [--settle-ms 500] [--timeout-ms 10000] [--extend-after-ms 4000] [--record-ms 50]
- *                    [--out DIR] [--mtt-config PATH]
+ *                    [--out DIR] [--mtt-config PATH] [--batch] [--headless]
+ *       --batch     add all displays of a cycle in one request (backends that support it: tessera)
+ *       --headless  keep one extra virtual display and switch the physical displays off for the run (journaled,
+ *                   so recover.exe can undo it), then switch them back on
+ *       --hdr       add HDR10 monitors (tessera)
  *   vdd-stress hold  --backend B --count N --seconds S [--mode ...] [--out DIR]   (steady state with N displays)
  *   vdd-stress probe --seconds S [--out DIR]                                     (baseline, no driver)
  *   vdd-stress save FILE | restore FILE                                          (display layout as JSON)
@@ -21,6 +25,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -35,6 +40,7 @@
 #include "backends.h"
 #include "probes.h"
 #include "tessera/display_topology.h"
+#include "tessera/state_restore.h"
 #include "tessera/win32.h"
 
 namespace fs = std::filesystem;
@@ -69,6 +75,8 @@ namespace {
     std::uint32_t seconds = 60;
     fs::path out = L"vdd-stress-out";
     backend_options_t backend_options;
+    bool batch = false;
+    bool headless = false;
   };
 
   struct event_t {
@@ -87,9 +95,10 @@ namespace {
   void usage() {
     std::puts(
       "Usage:\n"
-      "  vdd-stress run   --backend sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10] [--mode 1920x1080@60]\n"
-      "                   [--hold-ms 2000] [--settle-ms 500] [--timeout-ms 10000] [--extend-after-ms 4000]\n"
-      "                   [--record-ms 50] [--out DIR] [--mtt-config PATH]\n"
+      "  vdd-stress run   --backend tessera|sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10]\n"
+      "                   [--mode 1920x1080@60] [--hold-ms 2000] [--settle-ms 500] [--timeout-ms 10000]\n"
+      "                   [--extend-after-ms 4000] [--record-ms 50] [--out DIR] [--mtt-config PATH]\n"
+      "                   [--batch] [--headless] [--hdr]\n"
       "  vdd-stress hold  --backend B --count N --seconds S [--mode M] [--out DIR]\n"
       "  vdd-stress probe --seconds S [--out DIR]\n"
       "  vdd-stress save FILE | restore FILE\n"
@@ -109,6 +118,10 @@ namespace {
     try {
       for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string &a = args[i];
+        if (a == "--batch" || a == "--headless" || a == "--hdr") {
+          (a == "--batch" ? o.batch : a == "--headless" ? o.headless : o.backend_options.hdr) = true;
+          continue;
+        }
         if (i + 1 >= args.size()) {
           return make_error(tessera_code_e::invalid_data, "args", "missing value for " + a);
         }
@@ -304,6 +317,9 @@ namespace {
     s["cycles"] = o.cycles;
     s["hold_ms"] = o.hold_ms;
     s["aborted"] = aborted;
+    s["batch"] = o.batch;
+    s["headless"] = o.headless;
+    s["hdr"] = o.backend_options.hdr;
 
     bool targets_met = !aborted;
     json ops = json::array();
@@ -423,6 +439,86 @@ namespace {
     g_abort = was_aborted;
   }
 
+  /// --headless: one extra virtual display stays active while the physical displays are switched off.
+  struct headless_t {
+    bool anchored = false;
+    std::uint32_t anchor = 0;
+    display::topology_t restore_to;  ///< Physical displays plus the anchor, as before switching off.
+    std::unique_ptr<state::state_journal_t> journal;
+    std::string entry;  ///< Journal entry of the change; recover.exe undoes it if this process dies.
+  };
+
+  status_t enter_headless(backend_t &b, const options_t &o, const display::topology_t &before, headless_t &h, std::size_t &base) {
+    auto a = b.add(o.mode);
+    if (!a) {
+      return a.error();
+    }
+    h.anchored = true;
+    h.anchor = a.value();
+    std::string detail;
+    if (wait_active(before.paths.size() + 1, steady_t::now(), o, detail) < 0) {
+      return make_error(tessera_code_e::timeout, "headless", "the anchor display did not become active: " + detail);
+    }
+    auto now = display::capture();
+    if (!now) {
+      return now.error();
+    }
+    h.restore_to = now.value();
+    display::topology_t wanted;
+    for (const auto &p : now.value().paths) {
+      const bool physical = std::any_of(before.paths.begin(), before.paths.end(), [&](const display::path_t &q) {
+        return q.adapter_path == p.adapter_path && q.target_id == p.target_id;
+      });
+      if (!physical) {
+        wanted.paths.push_back(p);
+      }
+    }
+    if (wanted.paths.empty()) {
+      return make_error(tessera_code_e::unsafe, "headless", "no virtual display to keep active");
+    }
+    // The kept display becomes the primary (desktop origin).
+    const std::int32_t dx = wanted.paths.front().position_x;
+    const std::int32_t dy = wanted.paths.front().position_y;
+    for (auto &p : wanted.paths) {
+      p.position_x -= dx;
+      p.position_y -= dy;
+    }
+    auto path = state::state_journal_t::default_path();
+    if (!path) {
+      return path.error();
+    }
+    state::state_journal_t::options_t jo;
+    jo.file = path.value();
+    h.journal = std::make_unique<state::state_journal_t>(jo);
+    auto id = state::journaled_display_change(*h.journal, "vdd-stress --headless", wanted);
+    if (!id) {
+      return id.error();
+    }
+    h.entry = id.value();
+    base = wanted.paths.size();
+    std::printf("headless: physical displays off, %zu virtual display(s) active (journal entry %s)\n", base, h.entry.c_str());
+    return status_t::ok();
+  }
+
+  void leave_headless(backend_t &b, const options_t &o, headless_t &h, std::size_t physical) {
+    const bool was_aborted = g_abort.exchange(false);
+    if (!h.entry.empty()) {
+      if (auto st = display::apply(h.restore_to); !st) {
+        std::fprintf(stderr, "headless: restoring the physical displays failed: %s (the journal entry stays; run recover.exe)\n", st.error().to_string().c_str());
+      } else if (auto rm = h.journal->remove(h.entry); !rm) {
+        std::fprintf(stderr, "headless: %s\n", rm.error().to_string().c_str());
+      }
+    }
+    if (h.anchored) {
+      if (auto st = b.remove(h.anchor); !st) {
+        std::fprintf(stderr, "headless: removing the anchor display: %s\n", st.error().to_string().c_str());
+      }
+      std::string detail;
+      wait_active(physical, steady_t::now(), o, detail);
+    }
+    g_abort = was_aborted;
+  }
+
   int run(const options_t &o) {
     auto made = make_backend(o.backend, o.backend_options);
     if (!made) {
@@ -439,12 +535,21 @@ namespace {
       std::fprintf(stderr, "ERROR: %s\n", before.error().to_string().c_str());
       return 1;
     }
-    const std::size_t base = before.value().paths.size();
+    const std::size_t physical = before.value().paths.size();
+    std::size_t base = physical;
     if (base == 0) {
       std::fputs("ERROR: no active display; refusing to start\n", stderr);
       return 1;
     }
-    std::printf("%s: %zu active display(s) before the run; mode %s\n", backend.name(), base, o.mode.to_string().c_str());
+    if (o.headless && !backend.dynamic()) {
+      std::fputs("ERROR: --headless needs a backend that adds displays at runtime\n", stderr);
+      return 2;
+    }
+    if (o.batch && !backend.supports_batch()) {
+      std::fprintf(stderr, "ERROR: --batch is not supported by %s\n", backend.name());
+      return 2;
+    }
+    std::printf("%s: %zu active display(s) before the run; mode %s%s%s\n", backend.name(), base, o.mode.to_string().c_str(), o.batch ? ", batched" : "", o.headless ? ", headless" : "");
     if (!backend.notes().empty()) {
       std::printf("note: %s\n", backend.notes().c_str());
     }
@@ -456,8 +561,17 @@ namespace {
     std::vector<event_t> events;
     std::vector<std::uint32_t> handles;
     bool count_active = false;
+    headless_t headless;
+    bool headless_failed = false;
     {
       keepalive_t keepalive(backend, keepalive_errors);
+      if (o.headless) {
+        if (auto st = enter_headless(backend, o, before.value(), headless, base); !st) {
+          std::fprintf(stderr, "ERROR: %s\n", st.error().to_string().c_str());
+          headless_failed = true;
+          g_abort = true;
+        }
+      }
       auto timed = [&](const std::string &op, std::uint32_t n, std::uint32_t cycle, std::uint32_t index, std::size_t wanted, auto &&call) {
         event_t e;
         e.t_ms = ms_between(epoch, steady_t::now());
@@ -485,7 +599,21 @@ namespace {
       for (const auto n : o.counts) {
         for (std::uint32_t c = 1; c <= o.cycles && !g_abort; ++c) {
           bool ok = true;
-          if (backend.dynamic()) {
+          if (o.batch) {
+            ok = timed("add_batch", n, c, n, base + n, [&] {
+              return backend.add_batch(o.mode, n, handles);
+            });
+            if (ok) {
+              nap(o.hold_ms);
+            }
+            if (!handles.empty()) {
+              const std::vector<std::uint32_t> all = handles;
+              handles.clear();
+              ok = timed("remove_batch", n, c, n, base, [&] {
+                return backend.remove_batch(all);
+              }) && ok;
+            }
+          } else if (backend.dynamic()) {
             for (std::uint32_t i = 1; i <= n && ok && !g_abort; ++i) {
               ok = timed("add", n, c, i, base + i, [&]() -> status_t {
                 auto h = backend.add(o.mode);
@@ -522,9 +650,15 @@ namespace {
           nap(o.settle_ms);
         }
       }
-      cleanup(backend, handles, count_active, before.value(), base, o);
+      if (o.headless) {
+        leave_headless(backend, o, headless, physical);
+      }
+      cleanup(backend, handles, count_active, before.value(), physical, o);
     }
     probes.stop();
+    if (headless_failed) {
+      return 1;
+    }
 
     std::error_code ec;
     fs::create_directories(o.out, ec);

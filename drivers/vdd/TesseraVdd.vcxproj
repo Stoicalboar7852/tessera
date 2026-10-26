@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Tessera virtual display driver: UMDF 2.25 + IddCx 1.4, built with the WDK (EWDK locally, WDK NuGet in CI). -->
+<!-- Tessera virtual display driver: UMDF 2.25 + IddCx 1.10 (1.4 minimum), built with the WDK (EWDK locally, WDK NuGet in CI). -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -27,7 +27,7 @@
     <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
     <IndirectDisplayDriver>true</IndirectDisplayDriver>
     <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
-    <IDDCX_VERSION_MINOR>4</IDDCX_VERSION_MINOR>
+    <IDDCX_VERSION_MINOR>10</IDDCX_VERSION_MINOR>
     <Driver_SpectreMitigation>Spectre</Driver_SpectreMitigation>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -53,9 +53,10 @@
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ExceptionHandling>false</ExceptionHandling>
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <!-- Compile against IddCx 1.4 and require 1.4 (Windows 10 2004+). Newer IddCx features must be gated at
-           runtime with IDD_IS_FUNCTION_AVAILABLE once IDDCX_VERSION_MINOR is raised (Phase 1). -->
+      <!-- host-helpers/common/include: tessera/display_modes.h (header-only, shared with the tools and tests). -->
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)include;$(MSBuildThisFileDirectory)..\..\host-helpers\common\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Compile against IddCx 1.10 but require only 1.4 (Windows 10 2004+). The 1.10 features (HDR callbacks,
+           FP16, ReleaseAndAcquireBuffer2) are gated at runtime with IDD_IS_FIELD_AVAILABLE / IDD_IS_FUNCTION_AVAILABLE. -->
       <PreprocessorDefinitions>UMDF_DRIVER;IDDCX_VERSION_MAJOR=$(IDDCX_VERSION_MAJOR);IDDCX_VERSION_MINOR=$(IDDCX_VERSION_MINOR);IDDCX_MINIMUM_VERSION_REQUIRED=4;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -67,10 +68,18 @@
     </Inf>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\adapter.cpp" />
+    <ClCompile Include="src\device_cache.cpp" />
     <ClCompile Include="src\driver.cpp" />
+    <ClCompile Include="src\swapchain_worker.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\tessera_vdd_ioctl.h" />
+    <ClInclude Include="src\adapter.h" />
+    <ClInclude Include="src\device_cache.h" />
+    <ClInclude Include="src\swapchain_worker.h" />
+    <ClInclude Include="src\trace.h" />
+    <ClInclude Include="..\..\host-helpers\common\include\tessera\display_modes.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="TesseraVdd.inf" />

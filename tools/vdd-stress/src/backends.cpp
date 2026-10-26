@@ -1,8 +1,9 @@
 /**
  * @file tools/vdd-stress/src/backends.cpp
- * @brief SudoVDA, parsec-vdd and MTT VDD backends for vdd-stress.
+ * @brief Tessera, SudoVDA, parsec-vdd and MTT VDD backends for vdd-stress.
  *
- * The control interfaces are re-declared here from the drivers' public sources (interface GUIDs, IOCTL codes,
+ * Tessera's driver is driven through tessera/vdd_client.h. The third-party control interfaces are re-declared here
+ * from the drivers' public sources (interface GUIDs, IOCTL codes,
  * buffer layouts); no third-party code is copied:
  *   SudoVDA     github.com/SudoMaker/SudoVDA  Common/Include/sudovda-ioctl.h (protocol 0.2.x)
  *   parsec-vdd  github.com/nomi-san/parsec-vdd core/parsec-vdd.h (driver 0.45)
@@ -17,6 +18,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <regex>
 #include <vector>
 
@@ -29,6 +31,7 @@
 
 // local includes
 #include "backends.h"
+#include "tessera/vdd_client.h"
 #include "tessera/win32.h"
 
 namespace tessera::stress {
@@ -391,6 +394,140 @@ namespace tessera::stress {
       DEVINST devinst_ = 0;
     };
 
+    // ---------------------------------------------------------------------------------------------------------
+    // Tessera VDD
+    // ---------------------------------------------------------------------------------------------------------
+
+    class tessera_t: public backend_t {
+    public:
+      explicit tessera_t(bool hdr):
+          hdr_(hdr) {}
+
+      const char *name() const override {
+        return "tessera";
+      }
+
+      bool dynamic() const override {
+        return true;
+      }
+
+      // Monitors belong to this process's handle; no keepalive.
+      std::chrono::milliseconds keepalive_interval() const override {
+        return std::chrono::milliseconds(0);
+      }
+
+      bool supports_batch() const override {
+        return true;
+      }
+
+      status_t open() override {
+        auto c = vdd::vdd_client_t::open();
+        if (!c) {
+          return c.error();
+        }
+        auto v = c.value().version();
+        if (!v) {
+          return v.error();
+        }
+        client_.emplace(std::move(c.value()));
+        return status_t::ok();
+      }
+
+      result_t<std::uint32_t> add(const display_mode_t &mode) override {
+        std::vector<std::uint32_t> handles;
+        if (auto st = add_batch(mode, 1, handles); !st) {
+          return st.error();
+        }
+        return handles.front();
+      }
+
+      status_t remove(std::uint32_t handle) override {
+        return remove_batch({handle});
+      }
+
+      status_t add_batch(const display_mode_t &mode, std::uint32_t count, std::vector<std::uint32_t> &handles) override {
+        std::vector<vdd::monitor_spec_t> specs;
+        std::vector<std::uint32_t> wanted;
+        for (std::uint32_t i = 0; i < count; ++i) {
+          auto id = vdd::random_monitor_id();
+          if (!id) {
+            return id.error();
+          }
+          vdd::monitor_spec_t s;
+          s.id = id.value();
+          s.hdr = hdr_;
+          s.width = mode.width;
+          s.height = mode.height;
+          to_rational(mode.refresh_mhz, s.refresh_numerator, s.refresh_denominator);
+          const std::uint32_t handle = next_++;
+          s.name = L"Stress " + std::to_wstring(handle);
+          specs.push_back(s);
+          wanted.push_back(handle);
+        }
+        auto results = client_->add(specs);
+        if (!results) {
+          return results.error();
+        }
+        status_t first_failure;
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+          if (results.value()[i]) {
+            ids_[wanted[i]] = specs[i].id;
+            handles.push_back(wanted[i]);
+          } else if (first_failure) {
+            first_failure = results.value()[i].error();
+          }
+        }
+        return first_failure;
+      }
+
+      status_t remove_batch(const std::vector<std::uint32_t> &handles) override {
+        std::vector<vdd::monitor_id_t> ids;
+        for (const auto h : handles) {
+          const auto it = ids_.find(h);
+          if (it == ids_.end()) {
+            return make_error(tessera_code_e::not_found, "tessera remove", "unknown handle " + std::to_string(h));
+          }
+          ids.push_back(it->second);
+        }
+        auto statuses = client_->remove(ids);
+        if (!statuses) {
+          return statuses.error();
+        }
+        status_t first_failure;
+        for (std::size_t i = 0; i < handles.size(); ++i) {
+          ids_.erase(handles[i]);
+          if (!statuses.value()[i] && first_failure) {
+            first_failure = statuses.value()[i].error();
+          }
+        }
+        return first_failure;
+      }
+
+    private:
+      /// 59.94-style rates become exact NTSC fractions (60000/1001); others are millihertz over 1000.
+      static void to_rational(std::uint32_t mhz, std::uint32_t &num, std::uint32_t &den) {
+        for (const std::uint32_t hz : {24u, 30u, 48u, 60u, 72u, 90u, 120u, 144u, 240u}) {
+          if (mhz == hz * 1000) {
+            num = hz;
+            den = 1;
+            return;
+          }
+          if (mhz == static_cast<std::uint32_t>(std::lround(hz * 1000000.0 / 1001.0))) {
+            num = hz * 1000;
+            den = 1001;
+            return;
+          }
+        }
+        num = mhz;
+        den = 1000;
+      }
+
+      bool hdr_;
+      std::optional<vdd::vdd_client_t> client_;
+      std::map<std::uint32_t, vdd::monitor_id_t> ids_;
+      std::uint32_t next_ = 1;
+    };
+
   }  // namespace
 
   std::string display_mode_t::to_string() const {
@@ -431,7 +568,18 @@ namespace tessera::stress {
     return unsupported(name(), "set_count");
   }
 
+  status_t backend_t::add_batch(const display_mode_t &, std::uint32_t, std::vector<std::uint32_t> &) {
+    return unsupported(name(), "add_batch");
+  }
+
+  status_t backend_t::remove_batch(const std::vector<std::uint32_t> &) {
+    return unsupported(name(), "remove_batch");
+  }
+
   result_t<std::unique_ptr<backend_t>> make_backend(const std::string &name, const backend_options_t &options) {
+    if (name == "tessera") {
+      return std::unique_ptr<backend_t>(std::make_unique<tessera_t>(options.hdr));
+    }
     if (name == "sudovda") {
       return std::unique_ptr<backend_t>(std::make_unique<sudovda_t>());
     }
@@ -441,7 +589,7 @@ namespace tessera::stress {
     if (name == "mtt") {
       return std::unique_ptr<backend_t>(std::make_unique<mtt_t>(options.mtt_config));
     }
-    return make_error(tessera_code_e::invalid_data, "make_backend", "unknown backend '" + name + "' (sudovda, parsec, mtt)");
+    return make_error(tessera_code_e::invalid_data, "make_backend", "unknown backend '" + name + "' (tessera, sudovda, parsec, mtt)");
   }
 
 }  // namespace tessera::stress

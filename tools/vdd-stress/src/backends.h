@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 // local includes
 #include "tessera/result.h"
@@ -59,6 +60,17 @@ namespace tessera::stress {
 
     virtual status_t remove(std::uint32_t handle);
 
+    /// true if add_batch/remove_batch create or remove several displays in one driver request.
+    virtual bool supports_batch() const {
+      return false;
+    }
+
+    /// Adds `count` displays in one request; `handles` receives every display that was added, even on failure.
+    virtual status_t add_batch(const display_mode_t &mode, std::uint32_t count, std::vector<std::uint32_t> &handles);
+
+    /// Removes several displays in one request.
+    virtual status_t remove_batch(const std::vector<std::uint32_t> &handles);
+
     /// Restarts the driver with `count` displays (0 disables the device).
     virtual status_t set_count(std::uint32_t count, const display_mode_t &mode);
 
@@ -70,9 +82,10 @@ namespace tessera::stress {
 
   struct backend_options_t {
     std::string mtt_config = "C:\\VirtualDisplayDriver\\vdd_settings.xml";  ///< MTT VDD settings file.
+    bool hdr = false;  ///< tessera: add HDR10 monitors
   };
 
-  /// "sudovda", "parsec" or "mtt".
+  /// "tessera", "sudovda", "parsec" or "mtt".
   result_t<std::unique_ptr<backend_t>> make_backend(const std::string &name, const backend_options_t &options);
 
 }  // namespace tessera::stress

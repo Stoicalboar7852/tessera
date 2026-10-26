@@ -1,5 +1,5 @@
 ;
-; TesseraVdd.inf - Tessera virtual display driver (UMDF 2 + IddCx), Phase 0 skeleton
+; TesseraVdd.inf - Tessera virtual display driver (UMDF 2 + IddCx): monitors added and removed at runtime
 ;
 [Version]
 PnpLockDown=1

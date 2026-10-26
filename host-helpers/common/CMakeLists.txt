@@ -13,9 +13,11 @@ add_library(tessera_common STATIC
   src/display_topology.cpp
   src/state_journal.cpp
   src/state_restore.cpp
+  src/vdd_client.cpp
   src/win32.cpp)
-target_include_directories(tessera_common PUBLIC include)
+# drivers/vdd/include: the driver's control interface (plain C), used by vdd_client.
+target_include_directories(tessera_common PUBLIC include "${CMAKE_CURRENT_LIST_DIR}/../../drivers/vdd/include")
 target_link_libraries(tessera_common
-  PUBLIC nlohmann_json::nlohmann_json
+  PUBLIC nlohmann_json::nlohmann_json setupapi
   PRIVATE bcrypt shell32 ole32 advapi32 user32)
 tessera_apply_options(tessera_common)
