@@ -98,7 +98,7 @@ namespace tessera::state {
       }
       LARGE_INTEGER size {};
       if (!GetFileSizeEx(h.get(), &size)) {
-        return win32::last_error("GetFileSizeEx", win32::to_utf8(p.native()));
+        return win32::last_error("GetFileSizeEx", p.native());
       }
       if (size.QuadPart < 0 || static_cast<std::uint64_t>(size.QuadPart) > max_file_bytes) {
         return make_error(tessera_code_e::too_large, "state_journal", "file exceeds 1 MiB: " + win32::to_utf8(p.native()));
@@ -108,7 +108,7 @@ namespace tessera::state {
       while (done < data.size()) {
         DWORD got = 0;
         if (!ReadFile(h.get(), data.data() + done, static_cast<DWORD>(data.size() - done), &got, nullptr)) {
-          return win32::last_error("ReadFile", win32::to_utf8(p.native()));
+          return win32::last_error("ReadFile", p.native());
         }
         if (got == 0) {
           data.resize(done);  // file shrank while reading
@@ -123,18 +123,18 @@ namespace tessera::state {
     status_t write_file_durable(const fs::path &p, std::string_view data) {
       win32::unique_handle_t h(CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr));
       if (!h) {
-        return win32::last_error("CreateFileW(write)", win32::to_utf8(p.native()));
+        return win32::last_error("CreateFileW(write)", p.native());
       }
       std::size_t done = 0;
       while (done < data.size()) {
         DWORD wrote = 0;
         if (!WriteFile(h.get(), data.data() + done, static_cast<DWORD>(data.size() - done), &wrote, nullptr)) {
-          return win32::last_error("WriteFile", win32::to_utf8(p.native()));
+          return win32::last_error("WriteFile", p.native());
         }
         done += wrote;
       }
       if (!FlushFileBuffers(h.get())) {
-        return win32::last_error("FlushFileBuffers", win32::to_utf8(p.native()));
+        return win32::last_error("FlushFileBuffers", p.native());
       }
       return status_t::ok();
     }
@@ -148,7 +148,7 @@ namespace tessera::state {
     status_t replace_atomically(const fs::path &target, const fs::path &tmp, const fs::path &bak) {
       if (!exists_no_throw(target)) {
         if (!MoveFileExW(tmp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-          return win32::last_error("MoveFileExW", win32::to_utf8(target.native()));
+          return win32::last_error("MoveFileExW", target.native());
         }
         return status_t::ok();
       }
@@ -159,17 +159,17 @@ namespace tessera::state {
       if (err == ERROR_UNABLE_TO_MOVE_REPLACEMENT_2) {
         // target was already renamed to the backup name; finish by moving the replacement into place.
         if (!MoveFileExW(tmp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-          return win32::last_error("MoveFileExW(after ReplaceFileW)", win32::to_utf8(target.native()));
+          return win32::last_error("MoveFileExW(after ReplaceFileW)", target.native());
         }
         return status_t::ok();
       }
       if (err == ERROR_UNABLE_TO_MOVE_REPLACEMENT || err == ERROR_UNABLE_TO_REMOVE_REPLACED) {
         // target is unchanged; fall back to copy-to-backup then move.
         if (!CopyFileW(target.c_str(), bak.c_str(), FALSE)) {
-          return win32::last_error("CopyFileW(backup)", win32::to_utf8(bak.native()));
+          return win32::last_error("CopyFileW(backup)", bak.native());
         }
         if (!MoveFileExW(tmp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-          return win32::last_error("MoveFileExW(fallback)", win32::to_utf8(target.native()));
+          return win32::last_error("MoveFileExW(fallback)", target.native());
         }
         return status_t::ok();
       }
@@ -496,7 +496,7 @@ namespace tessera::state {
       // Keep the damaged main file for diagnosis, and keep the good backup as the backup.
       const fs::path quarantine = with_suffix(options_.file, (L".corrupt-" + std::to_wstring(now_unix_ms())).c_str());
       if (!MoveFileExW(options_.file.c_str(), quarantine.c_str(), MOVEFILE_WRITE_THROUGH)) {
-        return win32::last_error("MoveFileExW(quarantine)", win32::to_utf8(options_.file.native()));
+        return win32::last_error("MoveFileExW(quarantine)", options_.file.native());
       }
     }
     if (auto st = with_retries([&] { return write_file_durable(temp_path(), text.value()); }); !st) {

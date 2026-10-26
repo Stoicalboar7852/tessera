@@ -37,8 +37,12 @@ namespace tessera::win32 {
   /// Returns the system message for a Win32 error or HRESULT, without the trailing newline.
   std::string format_message(std::uint32_t code);
 
-  /// Builds an error from GetLastError(). Call it immediately after the failing API.
+  /// Builds an error from GetLastError(). Call it immediately after the failing API, and don't compute the
+  /// arguments with Win32 calls (they run first and may overwrite the last error).
   error_t last_error(std::string where, std::string_view context = {});
+
+  /// Same, with a UTF-16 context (e.g. a path) that is converted only after the last error has been read.
+  error_t last_error(std::string where, std::wstring_view context);
 
   /// Builds an error from an explicit Win32 error code.
   error_t win32_error(DWORD code, std::string where, std::string_view context = {});

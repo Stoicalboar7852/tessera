@@ -17,6 +17,7 @@ param(
     [Parameter(Mandatory)] [string]$ToolsDir
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'VmCommon.ps1')
 $c = Get-Content -Raw (Join-Path $VmRoot 'local\credentials.json') | ConvertFrom-Json
 $cred = New-Object PSCredential($c.user, (ConvertTo-SecureString $c.password -AsPlainText -Force))
 
@@ -58,9 +59,17 @@ $guestHelpers = {
 $s = Connect
 $results = [ordered]@{}
 try {
-    Invoke-Command -Session $s { New-Item -ItemType Directory -Force C:\tessera\svc\tools | Out-Null }
-    Copy-Item -ToSession $s -Path $ServiceExe -Destination C:\tessera\svc\tools\sunshinesvc.exe -Force
-    foreach ($t in 'topoctl.exe', 'recover.exe') { Copy-Item -ToSession $s -Path (Join-Path $ToolsDir $t) -Destination C:\tessera\ -Force }
+    Invoke-Command -Session $s {
+        # A service left over from an earlier run keeps sunshinesvc.exe locked.
+        if (Get-Service SunshineService -ErrorAction SilentlyContinue) {
+            Stop-Service SunshineService -Force -ErrorAction SilentlyContinue
+            sc.exe delete SunshineService | Out-Null
+            Start-Sleep 2
+        }
+        New-Item -ItemType Directory -Force C:\tessera\svc\tools | Out-Null
+    }
+    Send-VmFile $s $ServiceExe 'C:\tessera\svc\tools\sunshinesvc.exe'
+    foreach ($t in 'topoctl.exe', 'recover.exe') { Send-VmFile $s (Join-Path $ToolsDir $t) "C:\tessera\$t" }
 
     # (a) service start
     $results.a = Invoke-Command -Session $s -ArgumentList $guestHelpers {
@@ -89,23 +98,38 @@ try {
     # (c) reboot: stop the service, make a change, set the service to start at boot, reboot the guest.
     $results.c_before = Invoke-Command -Session $s -ArgumentList $guestHelpers {
         param($helpers); . ([scriptblock]::Create($helpers))
-        sc.exe stop SunshineService | Out-Null
-        Start-Sleep 3
-        sc.exe config SunshineService start= auto | Out-Null
+        Stop-Service SunshineService -Force
+        # sc.exe config once silently did not take effect here; set and verify instead.
+        Set-Service SunshineService -StartupType Automatic
+        $mode = (Get-CimInstance Win32_Service -Filter "Name='SunshineService'").StartMode
         $change = Invoke-Interactive 'C:\tessera\topoctl.exe change resolution --owner watchdog-test:reboot'
-        [pscustomobject]@{ change_exit = $change.Exit; entries = (Journal-Entries) }
+        [pscustomobject]@{ start_mode = $mode; change_exit = $change.Exit; entries = (Journal-Entries) }
     }
+    if ($results.c_before.start_mode -ne 'Auto') { throw "service start mode is $($results.c_before.start_mode), not Auto" }
     Remove-PSSession $s
     Restart-VM -Name $Name -Force -Wait -For Heartbeat
-    Start-Sleep -Seconds 30  # autologon + service start
-    $s = Connect
+    # Wait for autologon and for any first-boot servicing to finish (it can make programs fail to start).
+    $deadline = (Get-Date).AddMinutes(15)
+    do {
+        Start-Sleep 15
+        $s = Connect
+        $state = Invoke-Command -Session $s { [pscustomobject]@{
+            up = ((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalSeconds
+            explorer = [bool](Get-Process explorer -ErrorAction SilentlyContinue)
+            servicing = [bool](Get-Process TiWorker -ErrorAction SilentlyContinue) } }
+        $settled = $state.explorer -and $state.up -gt 60 -and -not $state.servicing
+        if (-not $settled) { Remove-PSSession $s }
+    } until ($settled -or (Get-Date) -gt $deadline)
     $results.c_after = Invoke-Command -Session $s -ArgumentList $guestHelpers {
         param($helpers); . ([scriptblock]::Create($helpers))
         $secs = Wait-JournalEmpty 120
         $match = Invoke-Interactive 'C:\tessera\topoctl.exe compare C:\tessera\before.json'
         $log = Get-Content C:\ProgramData\Tessera\logs\watchdog.log -Tail 12 -ErrorAction SilentlyContinue
-        sc.exe stop SunshineService | Out-Null; Start-Sleep 3; sc.exe delete SunshineService | Out-Null
-        [pscustomobject]@{ restored_after_s = $secs; match = $match.Out.Trim(); watchdog_log = ($log -join "`n") }
+        # "already-restored": the guest came back with the saved layout by itself (Hyper-V resets the resolution of
+        # its virtual display on reboot), so the watchdog only had to confirm it and clear the entry.
+        $outcome = if ($log -match 'restored display_topology .* owner=watchdog-test:reboot') { ($log | Select-String 'owner=watchdog-test:reboot' | Select-Object -Last 1).Line } else { 'no watchdog entry for the reboot change' }
+        Stop-Service SunshineService -Force; sc.exe delete SunshineService | Out-Null
+        [pscustomobject]@{ restored_after_s = $secs; match = $match.Out.Trim(); outcome = $outcome; watchdog_log = ($log -join "`n") }
     }
 }
 finally {

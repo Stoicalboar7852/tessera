@@ -19,6 +19,7 @@ param(
     [int]$WaitMinutes = 60
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'VmCommon.ps1')
 $c = Get-Content -Raw (Join-Path $VmRoot 'local\credentials.json') | ConvertFrom-Json
 $cred = New-Object PSCredential($c.user, (ConvertTo-SecureString $c.password -AsPlainText -Force))
 
@@ -34,8 +35,8 @@ while (-not $session) {
 }
 try {
     Invoke-Command -Session $session { New-Item -ItemType Directory -Force C:\tessera | Out-Null }
-    Copy-Item -ToSession $session -Path (Join-Path $PackageDir '*') -Destination C:\tessera\ -Force
-    Copy-Item -ToSession $session -Path $VddInstallExe -Destination C:\tessera\vdd-install.exe -Force
+    foreach ($f in Get-ChildItem $PackageDir -File) { Send-VmFile $session $f.FullName "C:\tessera\$($f.Name)" }
+    Send-VmFile $session $VddInstallExe 'C:\tessera\vdd-install.exe'
 
     $result = Invoke-Command -Session $session {
         $r = [ordered]@{}
@@ -46,13 +47,16 @@ try {
 
         $cer = Get-ChildItem C:\tessera\*.cer | Select-Object -First 1
         $thumb = (New-Object Security.Cryptography.X509Certificates.X509Certificate2($cer.FullName)).Thumbprint
-        foreach ($s in 'Root', 'TrustedPublisher') { Remove-Item "Cert:\LocalMachine\$s\$thumb" -ErrorAction SilentlyContinue }
+        # certutil, not the PKI cmdlets: Import-Certificate fails with access denied in a PowerShell Direct session.
+        foreach ($s in 'Root', 'TrustedPublisher') { certutil -delstore $s $thumb 2>&1 | Out-Null }
+        $r.cert_trusted_before = [bool](Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher -ErrorAction SilentlyContinue | Where-Object Thumbprint -eq $thumb)
 
         # Runs vdd-install with a time limit: an untrusted publisher can trigger a consent prompt that never
         # gets answered in this non-interactive session.
         function Invoke-VddInstall([string[]]$argv, [int]$timeoutSec = 180) {
             $log = "C:\tessera\vdd-install-$([guid]::NewGuid().ToString('N')).log"
             $p = Start-Process C:\tessera\vdd-install.exe -ArgumentList $argv -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            $null = $p.Handle  # keep the handle open, or ExitCode is empty after the process exits
             if (-not $p.WaitForExit($timeoutSec * 1000)) {
                 $p.Kill()
                 return [pscustomobject]@{ Exit = 'timeout'; Out = "no result within $timeoutSec s (waiting for a consent prompt?)" }
@@ -61,6 +65,9 @@ try {
             [pscustomobject]@{ Exit = $p.ExitCode; Out = $text }
         }
 
+        # Start clean (an earlier, interrupted run may have left a device or package behind).
+        Invoke-VddInstall @('remove', '--purge') | Out-Null
+
         # 1) Untrusted certificate: installation must not succeed.
         $u = Invoke-VddInstall @('install', 'C:\tessera\TesseraVdd.inf')
         $r.untrusted_install_exit = $u.Exit
@@ -68,7 +75,7 @@ try {
         Invoke-VddInstall @('remove') | Out-Null
 
         # 2) Trusted certificate: installation must succeed and the driver must run.
-        foreach ($s in 'Root', 'TrustedPublisher') { Import-Certificate -FilePath $cer.FullName -CertStoreLocation "Cert:\LocalMachine\$s" | Out-Null }
+        foreach ($s in 'Root', 'TrustedPublisher') { certutil -f -addstore $s $cer.FullName 2>&1 | Out-Null }
         $t = Invoke-VddInstall @('install', 'C:\tessera\TesseraVdd.inf')
         $r.trusted_install_exit = $t.Exit
         $r.trusted_install_output = $t.Out
@@ -86,7 +93,7 @@ try {
         [pscustomobject]$r
     }
     $result | Format-List | Out-String -Width 200 | Write-Host
-    $ok = $result.secure_boot -and -not $result.test_signing -and "$($result.untrusted_install_exit)" -ne '0' -and
+    $ok = $result.secure_boot -and -not $result.test_signing -and -not $result.cert_trusted_before -and "$($result.untrusted_install_exit)" -ne '0' -and
           "$($result.trusted_install_exit)" -eq '0' -and $result.pnp_status -like 'OK*' -and $result.query -like 'Tessera VDD*'
     Write-Host ($(if ($ok) { 'PASS: dev-signed VDD installs and runs with Secure Boot on; untrusted signature refused' } else { 'FAIL' }))
     exit $(if ($ok) { 0 } else { 1 })

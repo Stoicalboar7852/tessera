@@ -106,6 +106,11 @@ namespace tessera::win32 {
     return error_t {error_t::domain_e::win32, code, std::move(where), with_context(format_message(code), context)};
   }
 
+  error_t last_error(std::string where, std::wstring_view context) {
+    const DWORD code = GetLastError();  // before the conversion below can change it
+    return win32_error(code, std::move(where), to_utf8(context));
+  }
+
   error_t last_error(std::string where, std::string_view context) {
     return win32_error(GetLastError(), std::move(where), context);
   }

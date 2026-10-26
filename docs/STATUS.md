@@ -4,7 +4,7 @@ _Last updated: 2026-10-26_
 
 | Phase | State | Notes |
 |---|---|---|
-| 0 – Research and setup | **Nearly done** | Both acceptance criteria are met (see below). Still open: the driver check in the Secure Boot VM, and the Phase 0 summary. |
+| 0 – Research and setup | **Done**, waiting for the owner's go-ahead for Phase 1 | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
 | 1–12 | Not started | |
 
 ## Phase 0 acceptance
@@ -27,12 +27,28 @@ _Last updated: 2026-10-26_
 - `drivers/vdd` skeleton (UMDF 2.25 + IddCx 1.4, zero monitors, version IOCTL), `tools/signing`, `tools/vdd-install`.
 - Test VM tooling (`tools/vm`).
 
-## Not yet verified
-- Driver install + load **with Secure Boot on** (VM install in progress).
-- Service watchdog end to end (service install needs admin; planned in the VM).
-- Reboot path (journal survives a reboot, service restores on start): needs the service installed.
-- Emergency hotkey: built and covered by the same restore code as recover.exe, but not pressed in a test yet.
-- Local MSVC (EWDK) build of the native components; CI builds them with MSVC.
+## Verified in the Secure Boot VM (Windows 11 Pro 26300, Hyper-V Gen 2, Secure Boot + vTPM, no test signing)
+- **Driver** (`tools/vm/Test-VddInVm.ps1`: PASS):
+  - With the dev certificate untrusted, the install is refused.
+  - With it trusted, the VDD installs, starts (Status OK, no problem code), loads in WUDFHost and answers
+    `IOCTL_TESSERA_VDD_GET_VERSION`. Code Integrity reports no blocks.
+  - Removal and package purge are clean.
+- **Service watchdog** (`tools/vm/Test-WatchdogInVm.ps1`: PASS), with the CI-built `sunshinesvc.exe`:
+  - Journaled change, then service start: restored in 3.6 s.
+  - Change while the host is gone: restored on the next relaunch attempt.
+  - Change, then guest reboot: the journal survives, and the service restores at boot and clears the entry.
+    Hyper-V resets the guest's resolution on reboot, so that restore was a no-op ("already-restored").
+
+## Not yet verified (manual test procedures)
+- **A layout change that survives a reboot, restored by the service at boot, on a physical PC.** Install the
+  service elevated, run `topoctl change move-secondary`, reboot, log on, then `recover --list` must show 0 entries
+  and `topoctl compare <saved>` must match.
+- **Emergency hotkey:** start `tessera-agent.exe`, run `topoctl change move-secondary`, press Ctrl+Alt+Shift+F12, and
+  check that the layout is back. It uses the same restore code as `recover.exe`, but nobody has pressed it in a test yet.
+- **Local MSVC (EWDK) build** of the native components. CI builds them with MSVC; locally only the driver has been
+  built with the EWDK.
+- `vdd-install` reports the untrusted-publisher failure as win32 0x109, without the full SetupAPI/CERT_E code.
+  Cosmetic; to look at in Phase 1.
 
 ## Decisions (2026-10-25)
 - Product name **Tessera**.

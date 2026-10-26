@@ -10,6 +10,7 @@
  * Exit codes: 0 ok, 1 failure, 2 usage, 3 reboot required.
  */
 // standard includes
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -58,10 +59,11 @@ namespace {
   };
 
   /// Calls fn(set, data) for each present or non-present device whose hardware IDs include ours.
+  /// All classes are searched: a device whose driver install failed no longer reports the Display class.
   template<class Fn>
   result_t<int> for_each_device(Fn &&fn) {
     devinfo_t set;
-    set.h = SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr, 0);
+    set.h = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES);
     if (set.h == INVALID_HANDLE_VALUE) {
       return win32::last_error("SetupDiGetClassDevsW");
     }
@@ -115,7 +117,7 @@ namespace {
   int cmd_install(const std::wstring &inf) {
     wchar_t full[MAX_PATH];
     if (GetFullPathNameW(inf.c_str(), MAX_PATH, full, nullptr) == 0) {
-      return fail(win32::last_error("GetFullPathNameW", win32::to_utf8(inf)));
+      return fail(win32::last_error("GetFullPathNameW", inf));
     }
     auto existing = for_each_device([](HDEVINFO, SP_DEVINFO_DATA &) {});
     if (!existing) {
@@ -143,7 +145,7 @@ namespace {
     }
     BOOL reboot = FALSE;
     if (!UpdateDriverForPlugAndPlayDevicesW(nullptr, hardware_id, full, INSTALLFLAG_FORCE, &reboot)) {
-      return fail(win32::last_error("UpdateDriverForPlugAndPlayDevicesW", win32::to_utf8(full)));
+      return fail(win32::last_error("UpdateDriverForPlugAndPlayDevicesW", full));
     }
     std::printf("driver installed from %s%s\n", win32::to_utf8(full).c_str(), reboot ? " (reboot required)" : "");
     return reboot ? 3 : 0;
@@ -166,17 +168,21 @@ namespace {
             detail.cbSize = sizeof(detail);
             if (SetupDiGetDriverInfoDetailW(set, &data, &drv, &detail, sizeof(detail), nullptr) || GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
               std::wstring path = detail.InfFileName;
-              oem_infs.push_back(path.substr(path.find_last_of(L'\\') + 1));
+              std::wstring oem = path.substr(path.find_last_of(L'\\') + 1);
+              if (std::find(oem_infs.begin(), oem_infs.end(), oem) == oem_infs.end()) {
+                oem_infs.push_back(std::move(oem));  // several devices can share one driver package
+              }
             }
           }
         }
       }
+      const std::string id = instance_id(set, data);
       BOOL reboot = FALSE;
       if (DiUninstallDevice(nullptr, set, &data, 0, &reboot)) {
-        std::printf("removed %s\n", instance_id(set, data).c_str());
+        std::printf("removed %s\n", id.c_str());
         reboot_needed |= reboot != FALSE;
       } else {
-        std::fprintf(stderr, "ERROR: %s\n", win32::last_error("DiUninstallDevice", instance_id(set, data)).to_string().c_str());
+        std::fprintf(stderr, "ERROR: %s\n", win32::last_error("DiUninstallDevice", id).to_string().c_str());
         ++failures;
       }
     });
@@ -187,7 +193,7 @@ namespace {
       if (SetupUninstallOEMInfW(oem.c_str(), SUOI_FORCEDELETE, nullptr)) {
         std::printf("deleted driver package %s\n", win32::to_utf8(oem).c_str());
       } else {
-        std::fprintf(stderr, "ERROR: %s\n", win32::last_error("SetupUninstallOEMInfW", win32::to_utf8(oem)).to_string().c_str());
+        std::fprintf(stderr, "ERROR: %s\n", win32::last_error("SetupUninstallOEMInfW", oem).to_string().c_str());
         ++failures;
       }
     }
