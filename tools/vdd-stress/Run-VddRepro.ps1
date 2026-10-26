@@ -11,7 +11,8 @@
        TrustedPublisher; MTT: its SignPath leaf certificate in TrustedPublisher), exactly as their own installers do,
     3. installs it with vdd-install --hwid,
     4. runs "vdd-stress run" (add/remove cycles with 1, 2, 4, 8 displays) and "vdd-stress hold" (steady state),
-       each under WPR (GPU.light + CPU.light + tessera-display.wprp),
+       each under WPR in ring-buffer mode (GPU.light + CPU.light + tessera-display.wprp; the .etl holds the last
+       part of each run, because file mode wrote 20-40 GB per stress run),
     5. exports display/driver events from the System and Application logs,
     6. uninstalls the driver, removes the trust and settings it added, and restores the layout saved at the start.
 
@@ -135,7 +136,7 @@ function Start-Trace([string]$name) {
     if ($NoTrace) { return $false }
     Invoke-Tool $Wpr @('-cancel') (Join-Path $OutDir 'wpr-cancel.log') 3 | Out-Null  # a session left over from a crash
     $profile = Quote ((Join-Path $Stage 'tessera-display.wprp') + '!TesseraDisplay')
-    $rc = Invoke-Tool $Wpr @('-start', 'GPU.light', '-start', 'CPU.light', '-start', $profile, '-filemode') (Join-Path $OutDir 'wpr-start.log') 3
+    $rc = Invoke-Tool $Wpr @('-start', 'GPU.light', '-start', 'CPU.light', '-start', $profile) (Join-Path $OutDir 'wpr-start.log') 3
     if ($rc -ne 0) { Log "  WPR did not start ($name, exit $rc); continuing without a trace"; return $false }
     return $true
 }

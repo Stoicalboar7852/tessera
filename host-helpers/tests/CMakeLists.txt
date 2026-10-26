@@ -1,6 +1,7 @@
 include(GoogleTest)
 
 add_executable(tessera_common_tests
+  display_modes_test.cpp
   display_topology_test.cpp
   state_journal_test.cpp)
 target_link_libraries(tessera_common_tests PRIVATE tessera_common GTest::gtest_main)

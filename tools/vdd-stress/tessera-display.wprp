@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Display-stack events for the VDD freeze reproduction. Recorded together with the built-in GPU.light and
-  CPU.light profiles:  wpr -start GPU.light -start CPU.light -start tessera-display.wprp!TesseraDisplay -filemode
+  CPU.light profiles, in ring-buffer (memory) mode:
+    wpr -start GPU.light -start CPU.light -start tessera-display.wprp!TesseraDisplay
 -->
 <WindowsPerformanceRecorder Version="1.0" Author="Tessera" Comments="IddCx, display configuration, PnP and UMDF events">
   <Profiles>
@@ -36,5 +37,8 @@
     </Profile>
 
     <Profile Id="TesseraDisplay.Light.File" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="File" DetailLevel="Light" Base="TesseraDisplay.Verbose.File" />
+    <!-- Ring buffer: what Run-VddRepro.ps1 uses. File mode wrote 20-40 GB per stress run. -->
+    <Profile Id="TesseraDisplay.Verbose.Memory" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="Memory" DetailLevel="Verbose" Base="TesseraDisplay.Verbose.File" />
+    <Profile Id="TesseraDisplay.Light.Memory" Name="TesseraDisplay" Description="IddCx, display configuration, PnP and UMDF events" LoggingMode="Memory" DetailLevel="Light" Base="TesseraDisplay.Verbose.File" />
   </Profiles>
 </WindowsPerformanceRecorder>

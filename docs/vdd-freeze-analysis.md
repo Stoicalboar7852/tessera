@@ -1,7 +1,7 @@
 # Multi-display freeze in existing virtual display drivers
 
-_Status 2026-10-26: source review and issue-tracker evidence done; **measurements pending** (the elevated run of
-`tools/vdd-stress/Run-VddRepro.ps1` on the dev PC). The "Results" section is filled in from that run._
+_Status 2026-10-27: source review, issue-tracker evidence, and measurements on the dev PC
+(`logs\vdd-repro\20261026-2318`, see Results) are done. The freeze reproduces with all three drivers._
 
 The brief (§2, F1) says current VDDs freeze the system when more than one display is added, and asks for the root
 cause before a fix is designed. This document covers the three drivers named there: SudoVDA, MikeTheTech's Virtual
@@ -142,7 +142,38 @@ Kernel-Power and BugCheck events. It is not attributed to the driver unless it r
 
 ## Results
 
-_Pending the elevated run._
+Run on 2026-10-26 at 23:18–00:05 on the dev PC: Windows 11 IoT Enterprise LTSC 26100, Ryzen 5 7600X iGPU + RTX 4060
+Ti (driver 32.0.16.1088), two physical displays on, mode 1920×1080@60. Each run did 10 cycles with 1, 2, 4 and 8
+displays, plus a 120 s hold with 4 displays. The PC did not crash or restart during the run, and no WUDFHost crash
+or UMDF host failure was logged.
+
+| Driver | Run | Change time, median / max | Longest freeze: compose / Explorer UI | Stalls > 250 ms | Notes |
+|---|---|---|---|---|---|
+| none (baseline, 60 s) | probe | — | 21 ms / 2 ms | 0 | |
+| parsec-vdd 0.45 | stress | add 2.5 s / 3.2 s | 1.3 s / 2.2 s | 195 | After 4–5 add/remove cycles, ADD fails with `ERROR_GEN_FAILURE`; every run with 4 or 8 displays failed |
+| parsec-vdd | hold, 4 displays | — | 0.4 s / 1.2 s | 12 | the 2nd display never became active |
+| SudoVDA 1.10.9 | stress | add with 1 / 2 / 4 / 8 displays: 154 / 290 / 634 / 1109 ms median, **11.6 s** max; remove up to 3.5 s | **76.9 s** / **13.9 s** | 242 | dwm.exe used 86 % of a core on average |
+| SudoVDA | hold, 4 displays | — | 3.4 s / 4.0 s | 16 | stalls while nothing changes |
+| MTT VDD 11.30.4.434 | stress | count change 1.5–3.1 s median, **11.6 s** max | **121 s** / **14.2 s** | 56 | 4 of 80 count changes failed because the device vetoed the stop (`CR_NOT_DISABLEABLE`, Kernel-PnP 225) |
+| MTT VDD | hold, 4 displays | — | 5.2 s / 3.9 s | **150 in 120 s** | **WUDFHost used 89 % of a core with 4 idle displays**: the single-worker thrash, measured |
+
+What the numbers show:
+
+1. **MTT's thrash is real and continuous.** With four displays and nothing happening, its host process burns about
+   a core, and the screen stalls about every 0.8 s. Count changes freeze the desktop for up to two minutes.
+2. **SudoVDA's cost per added display grows with the number already present**, and composition freezes for tens of
+   seconds while the 8-display state is being built. Even with nothing changing (hold), it stalls for seconds.
+3. **parsec-vdd is the mildest while it works, but not robust.** Its driver starts refusing adds after a few
+   cycles, so the runs with 4 and 8 displays never got that far.
+4. **Windows has a floor that no driver avoids.** Even a single add with the best-behaved driver stalls composition
+   by up to ~300 ms and Explorer's UI thread by up to ~700 ms. Explorer used up to a full core reacting to display
+   changes, and AMD's `atieclxx.exe` reset the power scheme on every change (41 times in the MTT run). A good driver
+   cannot remove this cost; it can only avoid multiplying it. That is why Tessera adds all displays in one request and
+   leaves the topology to the host to apply once. If 250 ms turns out to be below what Windows allows on this PC,
+   `docs/perf.md` will say so with the numbers.
+
+The WPR traces (`*.etl`, 105 GB in total; file mode was a mistake for runs this long) are kept for the root-cause of
+the SudoVDA compose freeze if it is needed. Later runs use a ring buffer.
 
 ## Consequences for Tessera's driver
 
