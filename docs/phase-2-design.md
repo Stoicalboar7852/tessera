@@ -193,13 +193,15 @@ then recommends a scale close to the client monitor's. This is interface v3; v2 
 
 ## Latency budget
 
-The owner's stock Sunshine + Moonlight setup shows about 2–5 ms in total, so 2 ms per extra display would be a large
-share. Where extra displays can add latency, in the worst case where every display changes in the same frame:
+The owner's stock Sunshine + Moonlight setup shows about 2–5 ms in total, Ethernet to Ethernet (Wi-Fi and remote
+connections add more). So 2 ms per extra display would be a large share. The brief's target is for the LAN case,
+which is what is measured here. Where extra displays can add latency, in the worst case where every display changes
+in the same frame:
 
 | Stage | Extra per additional 1080p60 display | Why |
 |---|---|---|
 | Encode | about 1–1.5 ms (estimate) | The RTX 4060 Ti has **one** NVENC engine (NVIDIA's support matrix), so frames that arrive together are encoded in turn. |
-| Network send | about 0.35 ms at 20 Mbps, 0.8 ms at 50 Mbps | One 1 Gbit/s link: frames that are ready together go out one after another. |
+| Network send | none at the same bitrate setting; about 0.35 ms per extra 20 Mbps on 1 Gbit/s Ethernet if the total is raised | The bandwidth split gives all streams together the bitrate one stream would have, so each frame interval carries the same data as a single stream. If the total is raised per display, frames that are ready together go out one after another, which takes longer on slower links (Wi-Fi, internet). |
 | Capture and colour conversion | small | Separate GPU work per display, run in parallel. |
 | Client decode | depends on the client | One decoder per stream (Phase 3). |
 
@@ -209,7 +211,10 @@ use, typically one display is busy (a game or a video) and the others are mostly
 **Measurement:**
 - The test client reports, per stream, the same figures as Moonlight's statistics overlay: host processing latency,
   network latency and decode time.
-- The baseline is stock Sunshine with stock Moonlight streaming one display, on the same machines.
+- The baseline is stock Sunshine with stock Moonlight streaming one display, on the same machines and link, at the
+  same total bitrate. Tessera then runs at the same total and again with the total raised per display.
+- Wi-Fi and remote connections are recorded as extra rows when a client on them is available; they aren't in the
+  brief's target.
 - Tessera runs with 1–4 streams in two cases: worst (an animated window on every display) and typical (one animated,
   the others static).
 
