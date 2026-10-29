@@ -65,3 +65,7 @@ __mingw_vfprintf
 __mingw_vsprintf
 __acrt_iob_func
 abort
+bzero
+__bzero
+__chkstk_darwin
+dyld_stub_binder

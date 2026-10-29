@@ -24,9 +24,15 @@ add_test(NAME tessera_common_c_tests COMMAND tessera_common_c_tests)
 
 # The copies of the video path must not quietly share stream 0's state (src/TesseraVideoInstance.h).
 if(CMAKE_NM)
+  if(APPLE)
+    set(leading_underscore ON)
+  else()
+    set(leading_underscore OFF)
+  endif()
   add_test(NAME tessera_instance_symbols
     COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM}
       -DALLOWLIST=${CMAKE_CURRENT_SOURCE_DIR}/instance_symbols.txt
       "-DOBJECTS=$<TARGET_OBJECTS:moonlight-common-c>"
+      -DLEADING_UNDERSCORE=${leading_underscore}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/check_instance_symbols.cmake)
 endif()

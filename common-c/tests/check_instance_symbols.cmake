@@ -1,6 +1,9 @@
 # Fails if a copy of the video path (TesseraVideoStream<n>, TesseraVideoDepacketizer<n>, TesseraRtpVideoQueue<n>)
 # refers to a symbol outside the allowlist: everything it shares with stream 0 must be on the list on purpose
-# (src/TesseraVideoInstance.h). Run as: cmake -DNM=<nm> -DALLOWLIST=<file> -DOBJECTS=<objects> -P <this file>
+# (src/TesseraVideoInstance.h). Run as:
+#   cmake -DNM=<nm> -DALLOWLIST=<file> -DOBJECTS=<objects> [-DLEADING_UNDERSCORE=ON] -P <this file>
+# LEADING_UNDERSCORE: the platform prefixes C symbols with '_' (Mach-O).
+cmake_minimum_required(VERSION 3.16)
 if(NOT NM OR NOT ALLOWLIST OR NOT OBJECTS)
   message(FATAL_ERROR "NM, ALLOWLIST and OBJECTS are required")
 endif()
@@ -27,9 +30,9 @@ foreach(object IN LISTS OBJECTS)
     endif()
     # "U symbol" (GNU/LLVM) or "symbol" (some nm versions)
     string(REGEX REPLACE "^.* " "" symbol "${line}")
-    # Platform decorations: Mach-O leading underscore, PE import thunks
+    # Platform decorations: PE import thunks, Mach-O leading underscore
     string(REGEX REPLACE "^__imp_" "" symbol "${symbol}")
-    if(APPLE)
+    if(LEADING_UNDERSCORE)
       string(REGEX REPLACE "^_" "" symbol "${symbol}")
     endif()
     # The same copy's renamed entry points (defined by its sibling wrappers), and Tessera's per-stream hooks
@@ -37,7 +40,7 @@ foreach(object IN LISTS OBJECTS)
       continue()
     endif()
     if(NOT symbol IN_LIST allowed)
-      message(SEND_ERROR "${name} refers to '${symbol}', which isn't on the allowlist (${ALLOWLIST}). If it is safe to share between streams, add it; otherwise bind it per stream in src/TesseraVideoInstance.h.")
+      message(SEND_ERROR "${name} refers to '${symbol}' (nm: '${line}'), which isn't on the allowlist (${ALLOWLIST}). If it is safe to share between streams, add it; otherwise bind it per stream in src/TesseraVideoInstance.h.")
       set(failed TRUE)
     endif()
   endforeach()
