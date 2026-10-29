@@ -32,6 +32,9 @@ extern "C" {
 #include "sync.h"
 #include "video.h"
 
+// [fork] Tessera: multistream (protocol/multistream.md)
+#include "src/tessera/multistream_host.h"
+
 namespace asio = boost::asio;
 
 using asio::ip::tcp;
@@ -893,6 +896,12 @@ namespace rtsp_stream {
       }
     }
 
+    // [fork] Tessera: offer the extra streams; multistream sessions encrypt video whatever the address's mode
+    if (tessera::host::is_multistream(session)) {
+      encryption_flags_supported |= SS_ENC_VIDEO;
+      ss << "a=" << TESSERA_SDP_STREAMS << ':' << tessera::host::stream_count(session) << std::endl;
+    }
+
     // Report supported and required encryption flags
     ss << "a=x-ss-general.encryptionSupported:" << encryption_flags_supported << std::endl;
     ss << "a=x-ss-general.encryptionRequested:" << encryption_flags_requested << std::endl;
@@ -997,6 +1006,18 @@ namespace rtsp_stream {
     port_option.option = const_cast<char *>("Transport");
     port_option.content = port_value.data();
 
+    // [fork] Tessera: each extra video stream ("streamid=video/<i>/0") gets its own ping payload
+    std::string ping_payload = session.av_ping_payload;
+    if (type == "video"sv) {
+      if (auto extra = tessera::host::setup_ping_payload(session, target)) {
+        if (extra->empty()) {
+          cmd_not_found(sock, session, std::move(req));
+          return;
+        }
+        ping_payload = std::move(*extra);
+      }
+    }
+
     // Send identifiers that will be echoed in the other connections
     auto connect_data = std::to_string(session.control_connect_data);
     if (type == "control"sv) {
@@ -1004,7 +1025,7 @@ namespace rtsp_stream {
       payload_option.content = connect_data.data();
     } else {
       payload_option.option = const_cast<char *>("X-SS-Ping-Payload");
-      payload_option.content = session.av_ping_payload.data();
+      payload_option.content = ping_payload.data();
     }
 
     port_option.next = &payload_option;
@@ -1245,6 +1266,12 @@ namespace rtsp_stream {
       BOOST_LOG(error) << "Rejecting client that cannot comply with mandatory encryption requirement"sv;
 
       respond(sock, session, &option, 403, "Forbidden", req->sequenceNumber, {});
+      return;
+    }
+
+    // [fork] Tessera: each stream's display, and the extra streams' settings (protocol/multistream.md section 3)
+    if (!tessera::host::apply_announce(session, args, config)) {
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
 

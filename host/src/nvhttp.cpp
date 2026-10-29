@@ -41,6 +41,9 @@
 #include "uuid.h"
 #include "video.h"
 
+// [fork] Tessera: multistream (protocol/multistream.md)
+#include "src/tessera/multistream_host.h"
+
 using namespace std::literals;
 
 namespace nvhttp {
@@ -1292,6 +1295,7 @@ namespace nvhttp {
 
     const uint32_t codec_mode_flags = get_codec_mode_flags();
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
+    tessera::host::add_serverinfo(tree);  // [fork] Tessera
 
     if (!config::nvhttp.external_ip.empty()) {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
@@ -1414,6 +1418,9 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
 
+    // [fork] Tessera: the client's display list, if any (protocol/multistream.md section 2)
+    tessera::host::plan_launch(*launch_session, get_arg(args, TESSERA_LAUNCH_ARG_VERSION, ""), get_arg(args, TESSERA_LAUNCH_ARG_DISPLAYS, ""));
+
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
@@ -1421,7 +1428,10 @@ namespace nvhttp {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      // [fork] Tessera: multistream sessions arrange their own displays
+      if (!tessera::host::is_multistream(*launch_session)) {
+        display_device::configure_display(config::video, *launch_session);
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1469,6 +1479,7 @@ namespace nvhttp {
       )
     );
     tree.put("root.gamesession", 1);
+    tessera::host::add_launch_reply(*launch_session, tree);  // [fork] Tessera
 
     rtsp_stream::launch_session_raise(launch_session);
 
@@ -1529,11 +1540,17 @@ namespace nvhttp {
     }
     const auto launch_session = make_launch_session(host_audio, args);
 
+    // [fork] Tessera: the client's display list, if any (protocol/multistream.md section 2)
+    tessera::host::plan_launch(*launch_session, get_arg(args, TESSERA_LAUNCH_ARG_VERSION, ""), get_arg(args, TESSERA_LAUNCH_ARG_DISPLAYS, ""));
+
     if (no_active_sessions) {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      // [fork] Tessera: multistream sessions arrange their own displays
+      if (!tessera::host::is_multistream(*launch_session)) {
+        display_device::configure_display(config::video, *launch_session);
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1570,6 +1587,7 @@ namespace nvhttp {
       )
     );
     tree.put("root.resume", 1);
+    tessera::host::add_launch_reply(*launch_session, tree);  // [fork] Tessera
 
     rtsp_stream::launch_session_raise(launch_session);
   }

@@ -43,6 +43,10 @@ namespace video {
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+
+    // [fork] Tessera multistream (protocol/multistream.md)
+    std::string tessera_display;  ///< Display this stream captures; empty = Sunshine's own choice (output_name).
+    int tessera_stream = 0;  ///< Index of the stream in its session; 0 = the ordinary stream.
   };
 
   namespace amf {
@@ -455,6 +459,8 @@ namespace video {
      * @param last_frame Last frame.
      */
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+
+    int tessera_stream = 0;  ///< [fork] Tessera: stream index stamped on this session's packets.
   };
 
   // encoders
@@ -535,6 +541,7 @@ namespace video {
 
     std::vector<replace_t> *replacements = nullptr;  ///< Optional encoded-byte substitutions applied before packetization.
     stream::session_t *channel_data = nullptr;  ///< Stream session that receives this packet.
+    int tessera_stream = 0;  ///< [fork] Tessera: index of the stream within the session (0 = the ordinary stream).
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
   };
@@ -745,6 +752,11 @@ namespace video {
    * @return 0 when a usable encoder is selected; nonzero when probing fails.
    */
   int probe_encoders();
+
+  /**
+   * @brief [fork] Tessera: whether the chosen encoder can run several streams at once (parallel encoding).
+   */
+  bool tessera_supports_multistream();
 
   // Several NTSC standard refresh rates are hardcoded here, because their
   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could

@@ -47,6 +47,12 @@ file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
 # vigem
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
 
+# [fork] Tessera: protocol extensions (protocol/include) and the shared helpers (host-helpers/common, added by tools/)
+include_directories("${CMAKE_SOURCE_DIR}/../protocol/include")
+file(GLOB TESSERA_HOST_FILES CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/tessera/*.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tessera/*.h")
+
 # sunshine icon
 if(NOT DEFINED SUNSHINE_ICON_PATH)
     set(SUNSHINE_ICON_PATH "${CMAKE_SOURCE_DIR}/sunshine.ico")
@@ -80,7 +86,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Util.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/km/BusShared.h"
-        ${NVPREFS_FILES})
+        ${NVPREFS_FILES}
+        ${TESSERA_HOST_FILES})  # [fork] Tessera
 
 set(OPENSSL_LIBRARIES
         libssl.a
@@ -106,4 +113,5 @@ list(PREPEND PLATFORM_LIBRARIES
         userenv
         ws2_32
         wsock32
+        tessera_common  # [fork] Tessera
 )

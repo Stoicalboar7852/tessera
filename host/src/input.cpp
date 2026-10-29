@@ -10,6 +10,7 @@ extern "C" {
 
 // standard includes
 #include <algorithm>
+#include <array>
 #include <bitset>
 #include <chrono>
 #include <cmath>
@@ -36,6 +37,9 @@ extern "C" {
 #include "platform/virtualhid_input.h"
 #include "thread_pool.h"
 #include "utility.h"
+
+// [fork] Tessera: per-stream absolute mouse (protocol/multistream.md section 6)
+#include "tessera/protocol.h"
 
 // Win32 WHEEL_DELTA constant
 #ifndef WHEEL_DELTA
@@ -323,6 +327,10 @@ namespace input {
     thread_pool_util::ThreadPool::task_id_t mouse_left_button_timeout {};  ///< Mouse left button timeout.
 
     input::touch_port_t touch_port {{0, 0, 0, 0, 0, 0}, 0, 0, 0.0f, 0.0f, 1.0f, 1.0f, 0, 0};  ///< Touch coordinate bounds for the current stream.
+
+    // [fork] Tessera multistream: the displays of streams 1 .. n-1 (`touch_port` above is stream 0's)
+    std::array<std::optional<safe::mail_raw_t::event_t<input::touch_port_t>>, TESSERA_MAX_STREAMS> tessera_touch_port_events;  ///< Per-stream geometry events.
+    std::array<input::touch_port_t, TESSERA_MAX_STREAMS> tessera_touch_ports {};  ///< Latest per-stream geometry.
 
     int32_t accumulated_vscroll_delta {};  ///< Accumulated vscroll delta.
     int32_t accumulated_hscroll_delta {};  ///< Accumulated hscroll delta.
@@ -794,9 +802,17 @@ namespace input {
    * @param size The size of the client's surface containing the value.
    * @return The host-relative coordinate pair if a touchport is available.
    */
+  std::optional<std::pair<float, float>> client_to_touchport(const input::touch_port_t &touch_port, const std::pair<float, float> &val, const std::pair<float, float> &size);
+
   std::optional<std::pair<float, float>> client_to_touchport(std::shared_ptr<input_t> &input, const std::pair<float, float> &val, const std::pair<float, float> &size) {
     refresh_touch_port(input);
-    auto &touch_port = input->touch_port;
+    return client_to_touchport(input->touch_port, val, size);
+  }
+
+  /**
+   * @brief [fork] Tessera: as above, for a given display geometry (each stream of a multistream session has its own).
+   */
+  std::optional<std::pair<float, float>> client_to_touchport(const input::touch_port_t &touch_port, const std::pair<float, float> &val, const std::pair<float, float> &size) {
     if (!touch_port) {
       BOOST_LOG(verbose) << "Ignoring early absolute input without a touch port"sv;
       return std::nullopt;
@@ -909,6 +925,45 @@ namespace input {
     auto &touch_port = input->touch_port;
 
     platf::abs_mouse(platf_input, platform_touch_port(touch_port), tpcoords->first, tpcoords->second);
+  }
+
+  /**
+   * @brief [fork] Tessera: absolute mouse position on one stream's display (TESSERA_MOUSE_POSITION_MAGIC).
+   */
+  void passthrough(std::shared_ptr<input_t> &input, const tessera_mouse_position_t *packet) {
+    if (!config::input.mouse) {
+      return;
+    }
+
+    if (input->mouse_left_button_timeout == DISABLE_LEFT_BUTTON_DELAY) {
+      input->mouse_left_button_timeout = ENABLE_LEFT_BUTTON_DELAY;
+    }
+
+    const auto width = (float) util::endian::big(packet->width);
+    const auto height = (float) util::endian::big(packet->height);
+    if (width <= 0 || height <= 0 || packet->stream >= TESSERA_MAX_STREAMS) {
+      return;
+    }
+    const std::pair<float, float> position {(float) util::endian::big(packet->x), (float) util::endian::big(packet->y)};
+
+    if (packet->stream == 0) {
+      if (auto tpcoords = client_to_touchport(input, position, {width, height})) {
+        platf::abs_mouse(platf_input, platform_touch_port(input->touch_port), tpcoords->first, tpcoords->second);
+      }
+      return;
+    }
+
+    auto &event = input->tessera_touch_port_events[packet->stream];
+    if (!event) {
+      return;
+    }
+    auto &touch_port = input->tessera_touch_ports[packet->stream];
+    if ((*event)->peek()) {
+      touch_port = *(*event)->pop();
+    }
+    if (auto tpcoords = client_to_touchport(touch_port, position, {width, height})) {
+      platf::abs_mouse(platf_input, platform_touch_port(touch_port), tpcoords->first, tpcoords->second);
+    }
   }
 
   /**
@@ -1762,6 +1817,8 @@ namespace input {
         return validate_fixed_input_packet<NV_REL_MOUSE_MOVE_PACKET>(packet, declared_size);
       case MOUSE_MOVE_ABS_MAGIC:
         return validate_fixed_input_packet<NV_ABS_MOUSE_MOVE_PACKET>(packet, declared_size);
+      case TESSERA_MOUSE_POSITION_MAGIC:  // [fork] Tessera
+        return validate_fixed_input_packet<tessera_mouse_position_t>(packet, declared_size);
       case MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5:
       case MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5:
         return validate_fixed_input_packet<NV_MOUSE_BUTTON_PACKET>(packet, declared_size);
@@ -2166,6 +2223,9 @@ namespace input {
       case MOUSE_MOVE_ABS_MAGIC:
         passthrough(input, (PNV_ABS_MOUSE_MOVE_PACKET) payload);
         break;
+      case TESSERA_MOUSE_POSITION_MAGIC:  // [fork] Tessera
+        passthrough(input, static_cast<const tessera_mouse_position_t *>(static_cast<const void *>(payload)));
+        break;
       case MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5:
       case MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5:
         passthrough(input, (PNV_MOUSE_BUTTON_PACKET) payload);
@@ -2462,6 +2522,17 @@ namespace input {
                           100ms);
 
     return input;
+  }
+
+  void tessera_attach_stream(std::shared_ptr<input_t> &input, int stream, safe::mail_t mail) {
+    if (stream < 1 || stream >= TESSERA_MAX_STREAMS) {
+      return;
+    }
+    // On the input task, which reads these
+    dispatch_input_task([input, stream, mail = std::move(mail)]() {
+      input->tessera_touch_port_events[stream] = mail->event<input::touch_port_t>(mail::touch_port);
+      input->tessera_touch_ports[stream] = {};
+    });
   }
 
 #ifdef SUNSHINE_TESTS

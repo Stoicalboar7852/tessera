@@ -38,6 +38,10 @@ extern "C" {
 #include "thread_safe.h"
 #include "utility.h"
 
+// [fork] Tessera: multistream (protocol/multistream.md)
+#include "tessera/protocol.h"
+#include "src/tessera/multistream_host.h"
+
 constexpr int IDX_START_A = 0;  ///< Control-stream message index for the first stream-start packet.
 constexpr int IDX_START_B = 1;  ///< Control-stream message index for the second stream-start packet.
 constexpr int IDX_INVALIDATE_REF_FRAMES = 2;  ///< Control-stream message index for invalidate ref frames.
@@ -287,6 +291,24 @@ namespace stream {
   };
 
   /**
+   * @brief [fork] Tessera: HDR mode of an extra stream (TESSERA_CTRL_HDR_MODE).
+   */
+  struct control_tessera_hdr_mode_t {
+    control_header_v2 header;  ///< Control message header preceding this payload.
+    tessera_ctrl_stream_t stream;  ///< The stream it applies to.
+    std::uint8_t enabled;  ///< Nonzero when HDR should be enabled.
+    SS_HDR_METADATA metadata;  ///< HDR10 metadata sent with the control message.
+  };
+
+  /**
+   * @brief [fork] Tessera: an extra stream started or stopped (TESSERA_CTRL_STREAM_STATUS).
+   */
+  struct control_tessera_stream_status_t {
+    control_header_v2 header;  ///< Control message header preceding this payload.
+    tessera_ctrl_stream_status_t status;  ///< Stream, state and reason.
+  };
+
+  /**
    * @brief Packed encrypted control-channel envelope.
    */
   struct control_encrypted_t {
@@ -531,6 +553,24 @@ namespace stream {
       std::unique_ptr<platf::deinit_t> qos;  ///< Lifetime guard for video-socket QoS configuration.
     } video;  ///< Video worker thread state for the active stream.
 
+    using video_state_t = decltype(video);  ///< [fork] Tessera: per-stream video state, as for stream 0.
+
+    /**
+     * @brief [fork] Tessera multistream: one extra video stream (1 .. n-1) of this session.
+     */
+    struct tessera_stream_t {
+      int index = 0;  ///< Stream index in the session.
+      video_state_t video;  ///< Peer, sequence numbers, cipher and encoder events, as `video` is for stream 0.
+      safe::mail_t mail;  ///< The stream's own mail (IDR, HDR, touch port, shutdown).
+      video::config_t config;  ///< Encoder settings and the display this stream captures.
+      safe::mail_raw_t::event_t<video::hdr_info_t> hdr_queue;  ///< HDR changes waiting for the control thread.
+      std::atomic_int stop_reason {-1};  ///< Set when the stream stops on its own; reported to the client once.
+      bool stop_reported = false;  ///< Control thread only.
+      std::jthread thread;  ///< Capture and encode thread.
+    };
+
+    std::vector<std::unique_ptr<tessera_stream_t>> tessera_streams;  ///< [fork] Tessera: streams 1 .. n-1.
+
     struct {
       crypto::cipher::cbc_t cipher;  ///< AES-CBC cipher used for audio-packet encryption.
       std::string ping_payload;  ///< Payload expected from audio-channel ping packets.
@@ -572,6 +612,13 @@ namespace stream {
 
     std::atomic<session::state_e> state;  ///< Current lifecycle state observed by stream workers.
   };
+
+  /**
+   * @brief [fork] Tessera: the video state of one of a session's streams (0 = the ordinary stream).
+   */
+  static session_t::video_state_t &tessera_video(session_t &session, int stream) {
+    return stream == 0 ? session.video : session.tessera_streams[stream - 1]->video;
+  }
 
   /**
    * First part of cipher must be struct of type control_encrypted_t
@@ -1170,6 +1217,63 @@ namespace stream {
   }
 
   /**
+   * @brief [fork] Tessera: send an extra stream's HDR mode (TESSERA_CTRL_HDR_MODE).
+   */
+  static int send_tessera_hdr_mode(session_t *session, int stream, video::hdr_info_t hdr_info) {
+    control_tessera_hdr_mode_t plaintext {};
+    plaintext.header.type = TESSERA_CTRL_HDR_MODE;
+    plaintext.header.payloadLength = sizeof(control_tessera_hdr_mode_t) - sizeof(control_header_v2);
+    plaintext.stream.stream = static_cast<std::uint8_t>(stream);
+    plaintext.enabled = hdr_info->enabled;
+    plaintext.metadata = hdr_info->metadata;
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+      encrypted_payload;
+    auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      BOOST_LOG(warning) << "Couldn't send HDR mode of stream "sv << stream;
+      return -1;
+    }
+    BOOST_LOG(debug) << "Sent HDR mode of stream "sv << stream << ": "sv << hdr_info->enabled;
+    return 0;
+  }
+
+  /**
+   * @brief [fork] Tessera: tell the client an extra stream stopped (TESSERA_CTRL_STREAM_STATUS).
+   */
+  static int send_tessera_stream_status(session_t *session, int stream, int state, int reason) {
+    control_tessera_stream_status_t plaintext {};
+    plaintext.header.type = TESSERA_CTRL_STREAM_STATUS;
+    plaintext.header.payloadLength = sizeof(control_tessera_stream_status_t) - sizeof(control_header_v2);
+    plaintext.status.header.stream = static_cast<std::uint8_t>(stream);
+    plaintext.status.state = static_cast<std::uint8_t>(state);
+    plaintext.status.reason = static_cast<std::uint8_t>(reason);
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+      encrypted_payload;
+    auto payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      BOOST_LOG(warning) << "Couldn't send the status of stream "sv << stream;
+      return -1;
+    }
+    return 0;
+  }
+
+  /**
+   * @brief [fork] Tessera: the extra stream a control payload names, or nullptr if it names none of this session's.
+   */
+  static session_t::tessera_stream_t *tessera_stream_of(session_t *session, const std::string_view &payload, std::size_t min_size) {
+    if (payload.size() < min_size) {
+      return nullptr;
+    }
+    const auto stream = static_cast<std::uint8_t>(payload[0]);
+    if (stream < 1 || stream > session->tessera_streams.size()) {
+      return nullptr;
+    }
+    return session->tessera_streams[stream - 1].get();
+  }
+
+  /**
    * @brief Run the broadcast control-channel worker thread.
    *
    * @param server RTSP server instance handling the request.
@@ -1220,6 +1324,24 @@ namespace stream {
         << "lastFrame [" << lastFrame << ']';
 
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
+    });
+
+    // [fork] Tessera: IDR requests and reference-frame invalidation for extra streams (protocol/multistream.md)
+    server->map(TESSERA_CTRL_IDR_REQUEST, [&](session_t *session, const std::string_view &payload) {
+      if (auto *stream = tessera_stream_of(session, payload, sizeof(tessera_ctrl_stream_t))) {
+        BOOST_LOG(debug) << "type [TESSERA_CTRL_IDR_REQUEST] stream "sv << stream->index;
+        stream->video.idr_events->raise(true);
+      }
+    });
+
+    server->map(TESSERA_CTRL_INVALIDATE_REF_FRAMES, [&](session_t *session, const std::string_view &payload) {
+      if (auto *stream = tessera_stream_of(session, payload, sizeof(tessera_ctrl_invalidate_t))) {
+        tessera_ctrl_invalidate_t msg;
+        std::memcpy(&msg, payload.data(), sizeof(msg));
+        BOOST_LOG(debug) << "type [TESSERA_CTRL_INVALIDATE_REF_FRAMES] stream "sv << stream->index
+                         << " frames "sv << msg.first_frame << '-' << msg.last_frame;
+        stream->video.invalidate_ref_frames_events->raise(std::make_pair(std::int64_t {msg.first_frame}, std::int64_t {msg.last_frame}));
+      }
     });
 
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
@@ -1379,6 +1501,17 @@ namespace stream {
               auto hdr_info = hdr_queue->pop();
 
               send_hdr_mode(session, std::move(hdr_info));
+            }
+
+            // [fork] Tessera: HDR changes and stops of extra streams
+            for (auto &stream : session->tessera_streams) {
+              while (session->control.peer && stream->hdr_queue->peek()) {
+                send_tessera_hdr_mode(session, stream->index, stream->hdr_queue->pop());
+              }
+              if (const int reason = stream->stop_reason.load(); reason >= 0 && !stream->stop_reported) {
+                stream->stop_reported = true;
+                send_tessera_stream_status(session, stream->index, TESSERA_STREAM_STOPPED, reason);
+              }
             }
           }
 
@@ -1566,7 +1699,9 @@ namespace stream {
       frame_network_latency_logger.first_point_now();
 
       auto *session = packet->channel_data;
-      auto lowseq = session->video.lowseq;
+      // [fork] Tessera: each stream has its own peer, sequence numbers and IV space
+      auto &video = tessera_video(*session, packet->tessera_stream);
+      auto lowseq = video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
       std::vector<uint8_t> payload_with_replacements;
@@ -1713,10 +1848,10 @@ namespace stream {
 
           frame_fec_latency_logger.first_point_now();
           // If video encryption is enabled, we allocate space for the encryption header before each shard
-          auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+          auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
           frame_fec_latency_logger.second_point_now_and_log();
 
-          auto peer_address = session->video.peer.address();
+          auto peer_address = video.peer.address();
           auto batch_info = platf::batched_send_info_t {
             shards.headers.begin(),
             shards.prefixsize,
@@ -1726,7 +1861,7 @@ namespace stream {
             0,
             (uintptr_t) sock.native_handle(),
             peer_address,
-            session->video.peer.port(),
+            video.peer.port(),
             session->localAddress,
           };
 
@@ -1759,7 +1894,7 @@ namespace stream {
             inspect->packet.frameIndex = (uint32_t) packet->frame_index();
 
             // Encrypt this shard if video encryption is enabled
-            if (session->video.cipher) {
+            if (video.cipher) {
               // We use the deterministic IV construction algorithm specified in NIST SP 800-38D
               // Section 8.2.1. The sequence number is our "invocation" field and the 'V' in the
               // high bytes is the "fixed" field. Because each client provides their own unique
@@ -1768,15 +1903,16 @@ namespace stream {
               //
               // The IV counter is 64 bits long which allows for 2^64 encrypted video packets
               // to be sent to each client before the IV repeats.
-              std::copy_n((uint8_t *) &session->video.gcm_iv_counter, sizeof(session->video.gcm_iv_counter), std::begin(iv));
+              std::copy_n((uint8_t *) &video.gcm_iv_counter, sizeof(video.gcm_iv_counter), std::begin(iv));
+              iv[TESSERA_VIDEO_IV_STREAM_BYTE] = static_cast<std::uint8_t>(packet->tessera_stream);  // [fork] Tessera: 0 for stream 0
               iv[11] = 'V';  // Video stream
-              session->video.gcm_iv_counter++;
+              video.gcm_iv_counter++;
 
               // Encrypt the target buffer in place
               auto *prefix = (video_packet_enc_prefix_t *) shards.prefix(x);
               prefix->frameNumber = (std::uint32_t) packet->frame_index();
               std::copy(std::begin(iv), std::end(iv), prefix->iv.begin());
-              session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag.data(), (uint8_t *) inspect, &iv);
+              video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag.data(), (uint8_t *) inspect, &iv);
             }
 
             if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
@@ -1813,7 +1949,7 @@ namespace stream {
                     shards.blocksize,
                     (uintptr_t) sock.native_handle(),
                     peer_address,
-                    session->video.peer.port(),
+                    video.peer.port(),
                     session->localAddress,
                   };
 
@@ -1845,7 +1981,7 @@ namespace stream {
           lowseq += shards.size();
         });
 
-        session->video.lowseq = lowseq;
+        video.lowseq = lowseq;
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
@@ -2164,6 +2300,37 @@ namespace stream {
   }
 
   /**
+   * @brief [fork] Tessera: capture and encode thread of an extra stream.
+   * @details It stops alone: a failure is reported to the client, and the session's other streams carry on.
+   */
+  void tesseraVideoThread(session_t *session, session_t::tessera_stream_t *stream) {
+    const auto thread_name = "session::video" + std::to_string(stream->index);
+    platf::set_thread_name(thread_name);
+
+    while_starting_do_nothing(session->state);
+
+    auto ref = broadcast.ref();
+    auto error = recv_ping(session, ref, socket_e::video, stream->video.ping_payload, stream->video.peer, config::stream.ping_timeout);
+    if (error < 0) {
+      BOOST_LOG(error) << "Stream "sv << stream->index << ": no ping from the client; stream not started"sv;
+      stream->stop_reason = TESSERA_REASON_NONE;
+      return;
+    }
+
+    auto address = stream->video.peer.address();
+    stream->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, stream->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+
+    BOOST_LOG(info) << "Start capturing video for stream "sv << stream->index << " ("sv << stream->config.tessera_display << ')';
+    video::capture(stream->mail, stream->config, session);
+
+    // capture() returns when the session stops, or when capturing or encoding failed for good
+    if (session->state.load(std::memory_order_relaxed) == session::state_e::RUNNING) {
+      BOOST_LOG(error) << "Stream "sv << stream->index << " stopped"sv;
+      stream->stop_reason = TESSERA_REASON_ENCODER_FAILED;
+    }
+  }
+
+  /**
    * @brief Run the session audio capture and encode thread.
    *
    * @param session Active streaming or pairing session for the request.
@@ -2219,6 +2386,11 @@ namespace stream {
       }
 
       session.shutdown_event->raise(true);
+
+      // [fork] Tessera: extra streams have their own mail
+      for (auto &stream : session.tessera_streams) {
+        stream->mail->event<bool>(mail::shutdown)->raise(true);
+      }
     }
 
     /**
@@ -2241,6 +2413,11 @@ namespace stream {
 
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
+      for (auto &stream : session.tessera_streams) {  // [fork] Tessera
+        if (stream->thread.joinable()) {
+          stream->thread.join();
+        }
+      }
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
       session.audioThread.join();
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
@@ -2304,6 +2481,14 @@ namespace stream {
       session.audioThread = std::jthread {audioThread, &session};
       session.videoThread = std::jthread {videoThread, &session};
 
+      // [fork] Tessera: extra streams, each with its own capture thread and peer
+      for (auto &stream : session.tessera_streams) {
+        stream->video.peer.address(addr);
+        stream->video.peer.port(0);
+        input::tessera_attach_stream(session.input, stream->index, stream->mail);
+        stream->thread = std::jthread {tesseraVideoThread, &session, stream.get()};
+      }
+
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 
       // If this is the first session, invoke the platform callbacks
@@ -2352,6 +2537,25 @@ namespace stream {
           false
         };
         session->video.gcm_iv_counter = 0;
+      }
+
+      // [fork] Tessera: streams 1 .. n-1 (protocol/multistream.md), always encrypted, each in its own IV space
+      for (std::size_t i = 0; i < config.tessera_monitors.size(); ++i) {
+        auto stream = std::make_unique<session_t::tessera_stream_t>();
+        stream->index = static_cast<int>(i + 1);
+        stream->mail = std::make_shared<safe::mail_raw_t>();
+        stream->config = config.tessera_monitors[i];
+        stream->hdr_queue = stream->mail->event<video::hdr_info_t>(mail::hdr);
+        stream->video.idr_events = stream->mail->event<bool>(mail::idr);
+        stream->video.invalidate_ref_frames_events = stream->mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+        stream->video.lowseq = 0;
+        stream->video.ping_payload = tessera::host::ping_payload(launch_session, stream->index);
+        stream->video.cipher = crypto::cipher::gcm_t {
+          launch_session.gcm_key,
+          false
+        };
+        stream->video.gcm_iv_counter = 0;
+        session->tessera_streams.push_back(std::move(stream));
       }
 
       constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);

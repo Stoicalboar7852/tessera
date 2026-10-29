@@ -39,6 +39,8 @@ namespace stream {
     uint32_t encryptionFlagsEnabled;  ///< Bitmask of GameStream encryption features enabled for the session.
 
     std::optional<int> gcmap;  ///< Optional game-controller mapping override from the launch request.
+
+    std::vector<video::config_t> tessera_monitors;  ///< [fork] Tessera multistream: streams 1 .. n-1 (`monitor` is stream 0).
   };
 
   namespace session {

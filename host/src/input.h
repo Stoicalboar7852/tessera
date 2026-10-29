@@ -84,6 +84,15 @@ namespace input {
    */
   std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
 
+  /**
+   * @brief [fork] Tessera: map absolute mouse input on extra stream `stream` (1 .. n-1) through that stream's display.
+   *
+   * @param input Shared stream input state.
+   * @param stream Stream index.
+   * @param mail The stream's mailbox, whose touch port events describe its display.
+   */
+  void tessera_attach_stream(std::shared_ptr<input_t> &input, int stream, safe::mail_t mail);
+
 #ifdef SUNSHINE_TESTS
   namespace testing {
     /**

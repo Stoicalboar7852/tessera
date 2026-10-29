@@ -14,6 +14,10 @@
 #include "crypto.h"
 #include "thread_safe.h"
 
+namespace tessera::host {
+  struct launch_plan_t;  // [fork] Tessera: src/tessera/multistream_host.h
+}
+
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;  ///< GameStream base-port offset used for the RTSP setup listener.
 
@@ -99,6 +103,8 @@ namespace rtsp_stream {
     std::string rtsp_url_scheme;  ///< URL scheme selected by the RTSP SETUP flow.
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
+
+    std::shared_ptr<tessera::host::launch_plan_t> tessera;  ///< [fork] Tessera: the multistream plan, if the client sent a display list.
   };
 
   /**

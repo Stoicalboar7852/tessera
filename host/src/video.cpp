@@ -8,6 +8,8 @@
 #include <atomic>
 #include <bitset>
 #include <list>
+#include <map>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -708,6 +710,22 @@ namespace video {
   // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
   auto capture_thread_async = safe::make_shared<capture_thread_async_ctx_t>(start_capture_async, end_capture_async);  ///< Capture thread async.
   auto capture_thread_sync = safe::make_shared<capture_thread_sync_ctx_t>(start_capture_sync, end_capture_sync);  ///< Capture thread sync.
+
+  /**
+   * @brief [fork] Tessera: the capture thread for a stream's display.
+   * @details Multistream streams each capture their own display, so each such display gets its own capture thread;
+   *          everything else shares `capture_thread_async`. Entries stay for the life of the process, and a thread
+   *          only runs while a stream references it.
+   */
+  safe::shared_t<capture_thread_async_ctx_t> &capture_thread_async_for(const config_t &config) {
+    if (config.tessera_display.empty()) {
+      return capture_thread_async;
+    }
+    static std::mutex mutex;
+    static std::map<std::string, safe::shared_t<capture_thread_async_ctx_t>> threads;
+    std::lock_guard lock {mutex};
+    return threads.try_emplace(config.tessera_display, start_capture_async, end_capture_async).first->second;
+  }
 
 #ifdef _WIN32
   /**
@@ -1594,7 +1612,13 @@ namespace video {
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    if (const auto &tessera_display = capture_ctxs.front().config.tessera_display; !tessera_display.empty()) {
+      // [fork] Tessera: a multistream stream captures its own display (one capture thread per display)
+      display_names = {tessera_display};
+      display_p = 0;
+    } else {
+      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    }
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1782,12 +1806,15 @@ namespace video {
               // only support a single display session per device/application.
               disp.reset();
 
-              // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+              // [fork] Tessera: a multistream stream keeps its own display
+              if (capture_ctxs.front().config.tessera_display.empty()) {
+                // Refresh display names since a display removal might have caused the reinitialization
+                refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
-              // Process any pending display switch with the new list of displays
-              if (switch_display_event->peek()) {
-                display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
+                // Process any pending display switch with the new list of displays
+                if (switch_display_event->peek()) {
+                  display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
+                }
               }
 
               // reset_display() will sleep between retries
@@ -1895,6 +1922,7 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
+      packet->tessera_stream = session.tessera_stream;  // [fork] Tessera
       packets->raise(std::move(packet));
     }
 
@@ -1924,6 +1952,7 @@ namespace video {
 
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
     packet->channel_data = channel_data;
+    packet->tessera_stream = session.tessera_stream;  // [fork] Tessera
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
     packets->raise(std::move(packet));
@@ -2416,6 +2445,7 @@ namespace video {
     if (!session) {
       return;
     }
+    session->tessera_stream = config.tessera_stream;  // [fork] Tessera
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.
@@ -2885,7 +2915,7 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    auto ref = capture_thread_async.ref();
+    auto ref = capture_thread_async_for(config).ref();  // [fork] Tessera: per display for multistream
     if (!ref) {
       return;
     }
@@ -2975,6 +3005,9 @@ namespace video {
     idr_events->raise(true);
     if (chosen_encoder->flags & PARALLEL_ENCODING) {
       capture_async(std::move(mail), config, channel_data);
+    } else if (!config.tessera_display.empty()) {
+      // [fork] Tessera: the shared synchronous capture thread can't serve per-display streams
+      BOOST_LOG(error) << "Multistream needs an encoder with parallel encoding; stream "sv << config.tessera_stream << " not started"sv;
     } else {
       safe::signal_t join_event;
       auto ref = capture_thread_sync.ref();
@@ -2993,6 +3026,10 @@ namespace video {
       // Wait for join signal
       join_event.view();
     }
+  }
+
+  bool tessera_supports_multistream() {
+    return chosen_encoder && (chosen_encoder->flags & PARALLEL_ENCODING);
   }
 
   /**
