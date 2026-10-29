@@ -24,6 +24,7 @@ add_subdirectory(host-helpers)
 add_subdirectory(tools/recover)
 add_subdirectory(tools/vdd-install)
 add_subdirectory(tools/vdd-stress)
+add_subdirectory(tools/mstream-client)
 
 if(TESSERA_BUILD_TESTS)
   enable_testing()
