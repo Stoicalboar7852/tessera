@@ -32,8 +32,9 @@ foreach(object IN LISTS OBJECTS)
     string(REGEX REPLACE "^.* " "" symbol "${line}")
     # Platform decorations: PE import thunks, Mach-O leading underscore
     string(REGEX REPLACE "^__imp_" "" symbol "${symbol}")
-    if(LEADING_UNDERSCORE)
-      string(REGEX REPLACE "^_" "" symbol "${symbol}")
+    # (Exactly one: REGEX REPLACE "^_" would strip every leading underscore, since "^" matches again after a match.)
+    if(LEADING_UNDERSCORE AND symbol MATCHES "^_")
+      string(SUBSTRING "${symbol}" 1 -1 symbol)
     endif()
     # The same copy's renamed entry points (defined by its sibling wrappers), and Tessera's per-stream hooks
     if(symbol MATCHES "_tessera${instance}$" OR symbol MATCHES "^tessera" OR symbol MATCHES "^Tessera")
