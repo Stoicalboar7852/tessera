@@ -1,11 +1,11 @@
 # Project status: Tessera
 
-_Last updated: 2026-10-27_
+_Last updated: 2026-10-29_
 
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress.** Driver works (VM test passes, first dev-PC run: change times within 3 s). The stall target (≤ 250 ms) is not met, because of Windows' own per-change cost; a second dev-PC run with fixes and an experiment is next | See "Phase 1 progress" and `docs/perf.md`. |
+| 1 – VDD | **In progress.** Driver works: the VM test passes, and two dev-PC runs did 5,160 changes with no failure, each within 3 s with the physical monitors on. The stall target (≤ 250 ms) is not met, because of Windows' own per-change cost. Both runs gave every add a never-seen monitor, which is the worst case. A third run with stable monitor IDs is next | See "Phase 1 progress" and `docs/perf.md`. |
 | 2–12 | Not started | |
 
 ## Phase 1 progress
@@ -53,9 +53,28 @@ _Last updated: 2026-10-27_
   - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 2 h);
   - `Run-VddRepro.ps1` and `Get-VddPackages.ps1` cover the third-party reproduction;
   - `tools/vm/Test-VddMonitorsInVm.ps1` checks the driver in the Secure Boot VM.
-- **Open:** a reboot (to clear the stuck device), the second acceptance run (elevated), a decision on the stall
-  target, the
-  `docs/perf.md` numbers, and the Phase 1 summary.
+- **Second dev-PC acceptance run** (2026-10-29, `docs/perf.md`):
+  - all 3,560 changes succeed;
+  - the stalls look the same as in run 1;
+  - steady state with 4 displays has no stall over 250 ms;
+  - headless removes take up to 4.3 s, because Windows switched the physical monitors back on;
+  - Explorer crashed 4 times in `taskbar.dll`;
+  - the taskbar experiment is inconclusive, because the display went off on its idle timeout.
+
+  The "uninstall hang" was not the driver. Every add used a new random monitor ID, so about 4,300 leftover monitor
+  devices built up, and Windows deletes them at about 150 ms each when the adapter is removed.
+- **Since the second run:**
+  - `vdd-stress` uses one stable ID per display slot (`--new-ids` for the old behaviour). In headless runs it
+    switches the physical monitors off again after each change, as a host must. It keeps the displays on and records
+    locks and display-off.
+  - New `vdd-install forget-monitors [--settings]` deletes leftover test monitors and their saved display settings.
+  - The acceptance harness cleans up before and after a run, allows 30 minutes for the uninstall, turns QuickEdit off,
+    and adds a `newids-8x20` step.
+- **Open:**
+  - a reboot (to clear the stuck adapter);
+  - the third acceptance run (elevated);
+  - a decision on the stall target;
+  - the Phase 1 summary.
 
 ## Phase 0 acceptance
 

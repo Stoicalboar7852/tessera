@@ -8,11 +8,17 @@
   Run once from an elevated PowerShell; unattended and resumable like Run-VddRepro.ps1. It:
     1. copies vdd-stress, vdd-install, recover and the signed driver package to %ProgramData%\Tessera\vdd-accept
        (Administrators and SYSTEM may write there, users only read) and checks the package's signer is trusted;
-    2. installs the driver (vdd-install install), runs the steps below with vdd-stress, each under a WPR ring
+    2. deletes what earlier test monitors left behind (vdd-install forget-monitors --settings: their monitor
+       devices and Windows' saved display settings for them, after exporting GraphicsDrivers to the run folder);
+    3. installs the driver (vdd-install install), runs the steps below with vdd-stress, each under a WPR ring
        buffer (the .etl holds the end of the step), and exports display/driver events from the Windows logs;
-    3. uninstalls the driver, restores the display layout saved at the start, and checks the state journal is
-       empty (headless steps switch the physical monitors off through it);
-    4. writes results.md.
+    4. uninstalls the driver, deletes the test monitors' devices and settings again, restores the display layout
+       saved at the start, and checks the state journal is empty (headless steps switch the physical monitors off
+       through it);
+    5. writes results.md.
+  The displays are kept on and the console window's QuickEdit mode is off for the whole run: a click in the window
+  would otherwise pause it, and an idle display-off or lock changes how Windows handles display changes. Do not
+  lock the PC while it runs; vdd-stress records it if the session was locked anyway.
 
   Steps (each one vdd-stress run; a step the PC crashed in is recorded as "crashed" and not retried):
     baseline           60 s probe without the driver
@@ -23,12 +29,15 @@
     headless-8x100-b   the same, all 8 in one request
     notaskbar-8x30     8 displays x 30 cycles, one at a time, with "show taskbar on all displays" off  (experiment)
     notaskbar-8x30-b   the same, all 8 in one request                                            (experiment)
+    newids-8x20        8 displays x 20 cycles, one at a time, a never-seen monitor for every add (--new-ids)
     hold-4             4 displays for 120 s (steady-state stalls and CPU)
     mode-5994          2 displays x 10 cycles at 1920x1080@59.94
     hdr                2 HDR displays x 10 cycles (only if the driver reports HDR support)
   The notaskbar steps measure how much of Explorer's stall comes from building a taskbar per monitor: they set
   HKCU ...\Explorer\Advanced\MMTaskbarEnabled = 0 and restart Explorer, then put the previous value back (also after
-  a crash, from state.json). The whole run takes about two hours. Output: <project>\logs\vdd-accept\<timestamp>\.
+  a crash, from state.json). vdd-stress gives each display slot the same monitor ID every time, as a host gives
+  each client monitor a stable ID; newids-8x20 measures the first-connection case instead. The whole run takes
+  about two and a half hours. Output: <project>\logs\vdd-accept\<timestamp>\.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stress\Run-VddAcceptance.ps1"
@@ -55,6 +64,7 @@ $AllSteps = [ordered]@{
     'headless-8x100-b' = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '100', '--hold-ms', '1000', '--headless', '--batch')
     'notaskbar-8x30'   = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '30', '--hold-ms', '1000')
     'notaskbar-8x30-b' = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '30', '--hold-ms', '1000', '--batch')
+    'newids-8x20'      = @('run', '--backend', 'tessera', '--counts', '8', '--cycles', '20', '--hold-ms', '1000', '--new-ids')
     'hold-4'           = @('hold', '--backend', 'tessera', '--count', '4', '--seconds', '120')
     'mode-5994'        = @('run', '--backend', 'tessera', '--counts', '2', '--cycles', '10', '--mode', '1920x1080@59.94')
     'hdr'              = @('run', '--backend', 'tessera', '--counts', '2', '--cycles', '10', '--hdr')
@@ -62,6 +72,39 @@ $AllSteps = [ordered]@{
 
 function Log([string]$msg) { Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) }
 function Quote([string]$s) { '"' + $s + '"' }
+
+# Keeps the displays on (no idle display-off, screen saver or lock) while this thread runs, and turns QuickEdit off:
+# a click in the console window selects text and blocks every console write until a key is pressed, which stalled
+# the second run for two hours (2026-10-29).
+function Set-Unattended {
+    Add-Type -Namespace Tessera -Name Native -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);
+[DllImport("kernel32.dll")] public static extern System.IntPtr GetStdHandle(int which);
+[DllImport("kernel32.dll")] public static extern bool GetConsoleMode(System.IntPtr h, out uint mode);
+[DllImport("kernel32.dll")] public static extern bool SetConsoleMode(System.IntPtr h, uint mode);
+'@
+    [void][Tessera.Native]::SetThreadExecutionState([uint32]2147483651)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    $in = [Tessera.Native]::GetStdHandle(-10)  # STD_INPUT_HANDLE
+    $mode = [uint32]0
+    if ([Tessera.Native]::GetConsoleMode($in, [ref]$mode)) {
+        # clear ENABLE_QUICK_EDIT_MODE (0x40); ENABLE_EXTENDED_FLAGS (0x80) makes the change stick
+        [void][Tessera.Native]::SetConsoleMode($in, [uint32](($mode -bor 0x80) -band (-bnot 0x40)))
+    }
+}
+
+# Deletes the monitor devices and saved display settings that test monitors left behind. Each monitor ID Windows
+# has seen keeps a device node and settings; deleting thousands takes minutes (about 150 ms each).
+function Clear-TestMonitors([string]$log, [switch]$Settings) {
+    $arguments = @('forget-monitors')
+    if ($Settings) {
+        $backup = Join-Path $OutDir ('GraphicsDrivers-' + (Get-Date -Format 'HHmmss') + '.reg')
+        & reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' $backup /y | Out-Null
+        $arguments += '--settings'
+    }
+    $rc = Invoke-Tool (Join-Path $Stage 'vdd-install.exe') $arguments $log 60
+    Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s+\d+ removed' } | ForEach-Object { Log "  $_" }
+    Log "  vdd-install forget-monitors: exit $rc"
+}
 
 # --- "Show my taskbar on all displays" (per user; the elevated harness runs as the same user) ---------------------
 $AdvancedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
@@ -134,12 +177,11 @@ function Stop-Trace([bool]$started, [string]$etl) {
 function Export-Events([datetime]$since, [string]$file) {
     $providers = 'Display', 'Microsoft-Windows-DriverFrameworks-UserMode', 'Microsoft-Windows-Kernel-PnP', 'Microsoft-Windows-Kernel-Power',
         'BugCheck', 'nvlddmkm', 'amdkmdag', 'Microsoft-Windows-Dxgkrnl', 'Microsoft-Windows-WER-SystemErrorReporting'
+    # SilentlyContinue: "no events found" is an error to Get-WinEvent, and the transcript would log each one.
     $rows = @()
-    try { $rows += Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $since } -ErrorAction Stop | Where-Object { $providers -contains $_.ProviderName } } catch { }
-    try {
-        $rows += Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction Stop |
-            Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', 'Windows Error Reporting' -and $_.Message -match '(?i)dwm\.exe|WUDFHost|explorer\.exe|TesseraVdd|vdd-stress' }
-    } catch { }
+    $rows += @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $since } -ErrorAction SilentlyContinue | Where-Object { $providers -contains $_.ProviderName })
+    $rows += @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $since } -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', 'Windows Error Reporting' -and $_.Message -match '(?i)dwm\.exe|WUDFHost|explorer\.exe|TesseraVdd|vdd-stress' })
     $rows | Sort-Object TimeCreated | Select-Object TimeCreated, LogName, ProviderName, Id, LevelDisplayName, @{ n = 'Message'; e = { $m = ($_.Message -replace '\s+', ' '); $m.Substring(0, [Math]::Min(400, $m.Length)) } } |
         Export-Csv -NoTypeInformation -Encoding UTF8 $file
     return @($rows).Count
@@ -171,8 +213,12 @@ function Initialize-Stage([string]$root) {
 }
 
 function Remove-Driver {
-    $rc = Invoke-Tool (Join-Path $Stage 'vdd-install.exe') @('remove', '--purge') (Join-Path $OutDir 'uninstall.log') 5
+    # The monitor devices first, with progress: the adapter removal would otherwise delete them silently, one by one
+    # (the first two runs' uninstalls were killed by a 5 min timeout while doing that, leaving the adapter stuck).
+    Clear-TestMonitors (Join-Path $OutDir 'forget-monitors-end.log')
+    $rc = Invoke-Tool (Join-Path $Stage 'vdd-install.exe') @('remove', '--purge') (Join-Path $OutDir 'uninstall.log') 30
     Log "  vdd-install remove --purge: exit $rc"
+    Clear-TestMonitors (Join-Path $OutDir 'forget-settings-end.log') -Settings
     $rc = Invoke-Tool (Join-Path $Stage 'recover.exe') @('--restore', '--fallback') (Join-Path $OutDir 'recover.log') 5
     Log "  recover.exe: exit $rc"
     $rc = Invoke-Tool (Join-Path $Stage 'vdd-stress.exe') @('restore', (Quote (Join-Path $OutDir 'layout-before.json'))) (Join-Path $OutDir 'restore.log') 2
@@ -200,6 +246,25 @@ function Write-Results($state) {
     }
     $lines += @('', 'Notes:')
     foreach ($s in $state.steps) { $lines += "- $($s.id): " + ($s.notes -join '; ') }
+    # Measurements taken while the session was locked, the display was off or the session was remote are not
+    # comparable with the others; headless steps also show how often Windows switched the physical displays back on.
+    $lines += @('', 'Conditions:')
+    foreach ($s in $state.steps) {
+        $f = Join-Path $OutDir "$($s.id)\summary.json"
+        if (-not (Test-Path $f)) { continue }
+        $j = Get-Content -Raw $f | ConvertFrom-Json
+        $parts = @()
+        if ($j.monitor_ids) { $parts += "monitor IDs $($j.monitor_ids)" }
+        $e = $j.environment
+        if ($e) {
+            $parts += 'session locked {0:N0} s, display off {1:N0} s, remote {2:N0} s; {3} operation(s) while away' -f ($e.session_locked.ms / 1000), ($e.display_off.ms / 1000), ($e.remote_session.ms / 1000), $j.ops_while_away
+        }
+        if ($j.headless) {
+            $r = $j.headless_reapply_ms
+            $parts += "Windows switched the physical displays back on $($j.physical_reactivations) time(s)" + $(if ($r.n) { '; switched off again in {0:N0} / {1:N0} / {2:N0} ms (median / p95 / max)' -f $r.median, $r.p95, $r.max } else { '' })
+        }
+        $lines += "- $($s.id): " + ($parts -join '; ')
+    }
     $lines | Set-Content -Encoding UTF8 (Join-Path $OutDir 'results.md')
 }
 
@@ -210,8 +275,11 @@ if (-not $Resume) {
     if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot ("logs\vdd-accept\" + (Get-Date -Format 'yyyyMMdd-HHmm')) }
     New-Item -ItemType Directory -Force $OutDir | Out-Null
     Start-Transcript -Append (Join-Path $OutDir 'harness.log') | Out-Null
+    Set-Unattended
     Log "staging tools and the signed package in $Stage"
     Initialize-Stage $ProjectRoot
+    Log 'deleting what earlier test monitors left behind'
+    Clear-TestMonitors (Join-Path $OutDir 'forget-start.log') -Settings
     $os = Get-CimInstance Win32_OperatingSystem
     $ids = if ($Steps) { $Steps } else { @($AllSteps.Keys) }
     $state = [pscustomobject]@{
@@ -229,6 +297,7 @@ if (-not $Resume) {
     Log "registered logon task '$TaskName' (removed at the end)"
 } else {
     Start-Transcript -Append (Join-Path $OutDir 'harness.log') | Out-Null
+    Set-Unattended
     $state = Get-Content -Raw (Join-Path $OutDir 'state.json') | ConvertFrom-Json
     foreach ($s in $state.steps) { $s.notes = @($s.notes) }
     Log 'resuming after a restart'

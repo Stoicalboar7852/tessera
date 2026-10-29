@@ -7,13 +7,21 @@
  *   vdd-install remove [--purge]                remove the device(s); --purge also deletes the driver package
  *   vdd-install status                          list devices, their state and problem code
  *   vdd-install query                           open the control interface and print the driver version
+ *   vdd-install forget-monitors [--settings] [--dry-run]
+ *                                               delete the monitor devices Windows keeps for Tessera monitors that
+ *                                               are gone (one per monitor ID ever used); --settings also deletes
+ *                                               Windows' saved display settings for Tessera monitors (only while
+ *                                               none is connected)
  * `--hwid ID` (before or after the command) works on another root-enumerated display device instead, e.g. the
  * third-party VDDs that tools/vdd-stress compares against (Root\SudoMaker\SudoVDA, Root\Parsec\VDA, Root\MttVDD).
  * Exit codes: 0 ok, 1 failure, 2 usage, 3 reboot required.
  */
 // standard includes
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <cwctype>
 #include <string>
 #include <vector>
 
@@ -153,7 +161,128 @@ namespace {
     return reboot ? 3 : 0;
   }
 
+  /// "TSR" plus a 4-digit hex product code: a monitor ID from a Tessera EDID (display_modes.h).
+  bool is_tessera_monitor_id(const std::wstring &s) {
+    if (s.size() < 7 || _wcsnicmp(s.c_str(), L"TSR", 3) != 0) {
+      return false;
+    }
+    return std::all_of(s.begin() + 3, s.begin() + 7, [](wchar_t c) {
+      return std::iswxdigit(c) != 0;
+    });
+  }
+
+  /**
+   * @brief Windows' display database keys a saved setting by monitor ID, or by a monitor set ("ID+ID+...^hash").
+   *        True if any monitor in the key is a Tessera monitor.
+   */
+  bool mentions_tessera_monitor(const std::wstring &key) {
+    const std::wstring ids = key.substr(0, key.find(L'^'));
+    for (std::size_t start = 0; start <= ids.size();) {
+      const std::size_t end = std::min(ids.find_first_of(L"+*", start), ids.size());
+      if (is_tessera_monitor_id(ids.substr(start, end - start))) {
+        return true;
+      }
+      start = end + 1;
+    }
+    return false;
+  }
+
+  /// Deletes the subkeys of HKLM\...\GraphicsDrivers\<name> that mention a Tessera monitor. Returns the count.
+  int forget_settings(const wchar_t *name, bool dry_run, int &failures) {
+    const std::wstring path = std::wstring(L"SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers\\") + name;
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ | (dry_run ? 0 : DELETE | KEY_SET_VALUE), &key) != ERROR_SUCCESS) {
+      return 0;  // not every Windows version has every key
+    }
+    std::vector<std::wstring> doomed;
+    wchar_t sub[256];
+    for (DWORD i = 0;; ++i) {
+      DWORD len = static_cast<DWORD>(std::size(sub));
+      if (RegEnumKeyExW(key, i, sub, &len, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+        break;
+      }
+      if (mentions_tessera_monitor(sub)) {
+        doomed.emplace_back(sub);
+      }
+    }
+    int deleted = 0;
+    for (const auto &d : doomed) {
+      if (dry_run) {
+        ++deleted;
+      } else if (const LSTATUS rc = RegDeleteTreeW(key, d.c_str()); rc == ERROR_SUCCESS) {
+        ++deleted;
+      } else {
+        ++failures;
+        if (failures <= 5) {
+          std::fprintf(stderr, "ERROR: %s\n", win32::win32_error(static_cast<DWORD>(rc), "RegDeleteTreeW", win32::to_utf8(path + L"\\" + d)).to_string().c_str());
+        }
+      }
+    }
+    RegCloseKey(key);
+    std::printf("%s %d saved setting(s) in GraphicsDrivers\\%s\n", dry_run ? "would delete" : "deleted", deleted, win32::to_utf8(name).c_str());
+    return deleted;
+  }
+
+  /**
+   * @brief Every monitor ID a Tessera monitor ever had leaves a monitor device behind (DISPLAY\TSRxxxx\...),
+   *        and Windows deletes them one by one (about 150 ms each) when the adapter is removed. Deleting the ones
+   *        that are gone first keeps the adapter removal short and shows progress.
+   */
+  int cmd_forget(bool settings, bool dry_run) {
+    devinfo_t set;
+    set.h = SetupDiGetClassDevsW(&GUID_DEVCLASS_MONITOR, L"DISPLAY", nullptr, 0);  // present and non-present
+    if (set.h == INVALID_HANDLE_VALUE) {
+      return fail(win32::last_error("SetupDiGetClassDevsW(Monitor)"));
+    }
+    int present = 0;
+    int gone = 0;
+    int removed = 0;
+    int failures = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto data = sized<SP_DEVINFO_DATA>();
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(set.h, i, &data); ++i) {
+      const std::string id = instance_id(set.h, data);
+      if (id.size() < 15 || _strnicmp(id.c_str(), "DISPLAY\\", 8) != 0 || !is_tessera_monitor_id(win32::to_wide(id.substr(8, 7)))) {
+        continue;
+      }
+      ULONG status = 0;
+      ULONG problem = 0;
+      if (CM_Get_DevNode_Status(&status, &problem, data.DevInst, 0) != CR_NO_SUCH_DEVNODE) {
+        ++present;
+        continue;
+      }
+      ++gone;
+      if (dry_run) {
+        continue;
+      }
+      BOOL reboot = FALSE;
+      if (DiUninstallDevice(nullptr, set.h, &data, 0, &reboot)) {
+        if (++removed % 250 == 0) {
+          const auto s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count();
+          std::printf("  %d removed (%lld s)\n", removed, static_cast<long long>(s));
+          std::fflush(stdout);
+        }
+      } else if (++failures <= 5) {
+        std::fprintf(stderr, "ERROR: %s\n", win32::last_error("DiUninstallDevice", id).to_string().c_str());
+      }
+    }
+    std::printf("Tessera monitor devices: %d connected, %d gone, %s %d\n", present, gone, dry_run ? "would remove" : "removed", dry_run ? gone : removed);
+    if (settings) {
+      if (present != 0) {
+        std::fputs("ERROR: saved display settings are kept while a Tessera monitor is connected\n", stderr);
+        return 1;
+      }
+      for (const wchar_t *name : {L"Configuration", L"Connectivity", L"ScaleFactors", L"MonitorDataStore"}) {
+        forget_settings(name, dry_run, failures);
+      }
+    }
+    return failures ? 1 : 0;
+  }
+
   int cmd_remove(bool purge) {
+    if (_wcsicmp(hardware_id.c_str(), L"Root\\TesseraVdd") == 0) {
+      cmd_forget(false, false);  // best effort: the adapter removal deletes what is left
+    }
     std::vector<std::wstring> oem_infs;
     bool reboot_needed = false;
     int failures = 0;
@@ -240,7 +369,8 @@ namespace {
   }
 
   void usage() {
-    std::puts("Usage: vdd-install [--hwid ID] install <file.inf> | remove [--purge] | status | query");
+    std::puts("Usage: vdd-install [--hwid ID] install <file.inf> | remove [--purge] | status | query\n"
+              "       vdd-install forget-monitors [--settings] [--dry-run]");
   }
 
 }  // namespace
@@ -270,6 +400,23 @@ int wmain(int argc, wchar_t **argv) {
   }
   if (cmd == L"query" && args.size() == 1) {
     return cmd_query();
+  }
+  if (cmd == L"forget-monitors") {
+    bool settings = false;
+    bool dry_run = false;
+    bool valid = true;
+    for (std::size_t i = 1; i < args.size(); ++i) {
+      if (args[i] == L"--settings") {
+        settings = true;
+      } else if (args[i] == L"--dry-run") {
+        dry_run = true;
+      } else {
+        valid = false;
+      }
+    }
+    if (valid) {
+      return cmd_forget(settings, dry_run);
+    }
   }
   usage();
   return 2;

@@ -18,7 +18,7 @@ Phase 1 it reproduced the multi-display freeze with third-party drivers (`docs/v
 ```
 vdd-stress run   --backend tessera|sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10] [--mode 1920x1080@60]
                  [--hold-ms 2000] [--settle-ms 500] [--timeout-ms 10000] [--out DIR]
-                 [--batch] [--headless] [--hdr]
+                 [--batch] [--headless] [--hdr] [--new-ids]
 vdd-stress hold  --backend B --count N --seconds S [--out DIR]
 vdd-stress probe --seconds S [--out DIR]          baseline without any driver (no elevation needed)
 vdd-stress save FILE | restore FILE               display layout as JSON
@@ -29,8 +29,15 @@ vdd-stress save FILE | restore FILE               display layout as JSON
     what batching saves compared with one display at a time.
   - `--headless` adds one extra "anchor" display, then switches the physical displays off through the state journal
     (`journaled_display_change`), so `recover.exe --restore` can undo it if the run dies. It switches them back on at
-    the end. The cycles then run with no physical output active.
+    the end. Windows applies its saved (or default "extend") layout for each new set of monitors, which can switch the
+    physical displays back on. As a headless host must, vdd-stress then switches them off again; the summary counts
+    how often (`physical_reactivations`) and how long that took (`headless_reapply_ms`).
   - `--hdr` adds HDR10 monitors (tessera, driver on IddCx 1.10 or later).
+  - **Monitor IDs (tessera).** Each display slot gets the same monitor ID in every cycle and run, as a host gives each
+    client monitor a stable ID. Windows then sees the same few monitors again. `--new-ids` uses a never-seen ID for
+    every add instead: the first-connection case. Every new ID leaves a monitor device and saved display settings
+    behind, and the first two acceptance runs left about 7,000 of them. `vdd-install forget-monitors --settings`
+    deletes them.
 - **What it measures:**
   - **Change time:** from the driver call until the CCD topology shows the display as active (add) or gone (remove).
   - **Stalls:** three probes run during the whole run. `compose` redraws a 4×4 topmost window in the bottom-right
@@ -38,6 +45,10 @@ vdd-stress save FILE | restore FILE               display layout as JSON
     `sched` is a time-critical thread sleeping 1 ms. Gaps longer than `--record-ms` (default 50) are kept, with the
     operation they overlapped.
   - **CPU:** dwm.exe, WUDFHost.exe and explorer.exe, once per second.
+  - **Conditions:** it keeps the displays on while it runs (no idle display-off or screen saver). The summary's
+    `environment` records how long the session was locked, the console display was off or the session was remote,
+    and `ops_while_away` counts the operations affected. Windows and Explorer handle display changes differently
+    then, so those measurements are not comparable.
 - **Output:** `events.csv`, `gaps.csv`, `cpu.csv` and `summary.json`. The summary includes `targets_met` against the
   brief's limits (each change < 3 s, no stall > 250 ms, no hang). Exit code 0 means the targets were met, 1 missed or
   failed, 2 usage error, 3 aborted.
@@ -54,8 +65,9 @@ powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stre
 ```
 
 Needs the driver package built and signed (`tools/signing/Sign-DriverPackage.ps1`) with a certificate trusted by
-`tools/setup/admin-once.ps1`. It takes about two hours. Output goes to `<project>\logs\vdd-accept\<timestamp>\`, with
-`results.md` as the overview. The script header lists the steps.
+`tools/setup/admin-once.ps1`. It takes about two and a half hours, plus the clean-up of earlier test monitors (about
+150 ms per leftover monitor device, before and after). Output goes to `<project>\logs\vdd-accept\<timestamp>\`, with
+`results.md` as the overview. The script header lists the steps. Don't lock the PC while it runs.
 
 ## Reproduction run (third-party drivers)
 

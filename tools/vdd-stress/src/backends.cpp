@@ -31,6 +31,7 @@
 
 // local includes
 #include "backends.h"
+#include "tessera/display_modes.h"
 #include "tessera/vdd_client.h"
 #include "tessera/win32.h"
 
@@ -400,8 +401,9 @@ namespace tessera::stress {
 
     class tessera_t: public backend_t {
     public:
-      explicit tessera_t(bool hdr):
-          hdr_(hdr) {}
+      explicit tessera_t(const backend_options_t &options):
+          hdr_(options.hdr),
+          new_ids_(options.new_ids) {}
 
       const char *name() const override {
         return "tessera";
@@ -448,13 +450,23 @@ namespace tessera::stress {
       status_t add_batch(const display_mode_t &mode, std::uint32_t count, std::vector<std::uint32_t> &handles) override {
         std::vector<vdd::monitor_spec_t> specs;
         std::vector<std::uint32_t> wanted;
+        std::vector<std::uint32_t> slots;
         for (std::uint32_t i = 0; i < count; ++i) {
-          auto id = vdd::random_monitor_id();
-          if (!id) {
-            return id.error();
-          }
           vdd::monitor_spec_t s;
-          s.id = id.value();
+          if (new_ids_) {
+            auto id = vdd::random_monitor_id();
+            if (!id) {
+              return id.error();
+            }
+            s.id = id.value();
+          } else {
+            const auto slot = free_slot(slots);
+            if (!slot) {
+              return make_error(tessera_code_e::invalid_data, "tessera add", "more than " + std::to_string(TESSERA_VDD_MAX_MONITORS) + " displays");
+            }
+            slots.push_back(*slot);
+            s.id = stable_id(*slot);
+          }
           s.hdr = hdr_;
           s.width = mode.width;
           s.height = mode.height;
@@ -474,6 +486,9 @@ namespace tessera::stress {
             const vdd::added_monitor_t &a = results.value()[i].value();
             ids_[wanted[i]] = specs[i].id;
             targets_[wanted[i]] = {a.adapter.LowPart, a.adapter.HighPart, a.target_id};
+            if (!new_ids_) {
+              slots_[wanted[i]] = slots[i];
+            }
             handles.push_back(wanted[i]);
           } else if (first_failure) {
             first_failure = results.value()[i].error();
@@ -499,6 +514,7 @@ namespace tessera::stress {
         for (std::size_t i = 0; i < handles.size(); ++i) {
           ids_.erase(handles[i]);
           targets_.erase(handles[i]);
+          slots_.erase(handles[i]);
           if (!statuses.value()[i] && first_failure) {
             first_failure = statuses.value()[i].error();
           }
@@ -515,6 +531,40 @@ namespace tessera::stress {
       }
 
     private:
+      /// The lowest slot that neither an added display nor `taken` uses.
+      std::optional<std::uint32_t> free_slot(const std::vector<std::uint32_t> &taken) const {
+        for (std::uint32_t s = 0; s < TESSERA_VDD_MAX_MONITORS; ++s) {
+          const auto in_use = [s](const auto &e) {
+            return e.second == s;
+          };
+          if (std::find(taken.begin(), taken.end(), s) == taken.end() && std::none_of(slots_.begin(), slots_.end(), in_use)) {
+            return s;
+          }
+        }
+        return std::nullopt;
+      }
+
+      /**
+       * @brief The same ID for a slot in every run, as a host gives each client monitor a stable ID, so Windows
+       *        sees the same few monitors again instead of a new monitor (device node and saved settings) per add.
+       *        Chosen so that the driver puts slot s on connector s, whatever order the slots are added in.
+       */
+      static vdd::monitor_id_t stable_id(std::uint32_t slot) {
+        static constexpr char prefix[] = "vdd-stress";
+        std::uint8_t raw[16] = {};
+        std::memcpy(raw, prefix, sizeof(prefix) - 1);
+        raw[10] = static_cast<std::uint8_t>(slot);
+        for (std::uint32_t n = 0;; ++n) {
+          std::memcpy(raw + 12, &n, sizeof(n));
+          if (modes::identity_from_id(raw).serial % TESSERA_VDD_MAX_MONITORS == slot) {
+            break;
+          }
+        }
+        vdd::monitor_id_t id;
+        std::memcpy(id.data(), raw, sizeof(raw));
+        return id;
+      }
+
       /// 59.94-style rates become exact NTSC fractions (60000/1001); others are millihertz over 1000.
       static void to_rational(std::uint32_t mhz, std::uint32_t &num, std::uint32_t &den) {
         for (const std::uint32_t hz : {24u, 30u, 48u, 60u, 72u, 90u, 120u, 144u, 240u}) {
@@ -534,9 +584,11 @@ namespace tessera::stress {
       }
 
       bool hdr_;
+      bool new_ids_;
       std::optional<vdd::vdd_client_t> client_;
       std::map<std::uint32_t, vdd::monitor_id_t> ids_;
       std::map<std::uint32_t, target_ref_t> targets_;
+      std::map<std::uint32_t, std::uint32_t> slots_;  ///< handle -> slot of its stable ID
       std::uint32_t next_ = 1;
     };
 
@@ -590,7 +642,7 @@ namespace tessera::stress {
 
   result_t<std::unique_ptr<backend_t>> make_backend(const std::string &name, const backend_options_t &options) {
     if (name == "tessera") {
-      return std::unique_ptr<backend_t>(std::make_unique<tessera_t>(options.hdr));
+      return std::unique_ptr<backend_t>(std::make_unique<tessera_t>(options));
     }
     if (name == "sudovda") {
       return std::unique_ptr<backend_t>(std::make_unique<sudovda_t>());

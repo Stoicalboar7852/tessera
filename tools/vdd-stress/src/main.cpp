@@ -10,6 +10,7 @@
  *       --headless  keep one extra virtual display and switch the physical displays off for the run (journaled,
  *                   so recover.exe can undo it), then switch them back on
  *       --hdr       add HDR10 monitors (tessera)
+ *       --new-ids   a never-seen monitor for every add (tessera; default: one stable ID per slot, like a host)
  *   vdd-stress hold  --backend B --count N --seconds S [--mode ...] [--out DIR]   (steady state with N displays)
  *   vdd-stress probe --seconds S [--out DIR]                                     (baseline, no driver)
  *   vdd-stress save FILE | restore FILE                                          (display layout as JSON)
@@ -17,12 +18,15 @@
  * Each cycle adds `count` displays one by one (or restarts a fixed-count driver with `count` displays), waits
  * until each is active in the CCD topology, holds, then removes them again. The display layout from before the
  * run is restored at the end. Output: events.csv, gaps.csv, cpu.csv and summary.json in --out.
+ * The displays are kept on while it runs, and the summary records any time the session was locked, the console
+ * display was off or the session was remote, since measurements taken then are not comparable.
  * Exit codes: 0 targets met, 1 targets missed or an operation failed, 2 usage, 3 aborted.
  */
 // standard includes
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -37,6 +41,7 @@
 // platform includes
 #include <windows.h>
 #include <objbase.h>
+#include <wtsapi32.h>
 
 // local includes
 #include "backends.h"
@@ -89,8 +94,10 @@ namespace {
     std::uint32_t index = 0;  ///< Display number within the cycle (add/remove), or the new count (set_count).
     double call_ms = 0;  ///< Time inside the driver call.
     double visible_ms = -1;  ///< From the call until the CCD topology showed the change; -1 = never.
+    double reapply_ms = -1;  ///< --headless: switching the physical displays off again after Windows switched them on.
     double end_ms = 0;
     bool ok = false;
+    bool away = false;  ///< Session locked, console display off or session remote during the operation.
     std::string detail;
   };
 
@@ -100,7 +107,7 @@ namespace {
       "  vdd-stress run   --backend tessera|sudovda|parsec|mtt [--counts 1,2,4,8] [--cycles 10]\n"
       "                   [--mode 1920x1080@60] [--hold-ms 2000] [--settle-ms 500] [--timeout-ms 10000]\n"
       "                   [--extend-after-ms 4000] [--record-ms 50] [--out DIR] [--mtt-config PATH]\n"
-      "                   [--batch] [--headless] [--hdr]\n"
+      "                   [--batch] [--headless] [--hdr] [--new-ids]\n"
       "  vdd-stress hold  --backend B --count N --seconds S [--mode M] [--out DIR]\n"
       "  vdd-stress probe --seconds S [--out DIR]\n"
       "  vdd-stress save FILE | restore FILE\n"
@@ -120,8 +127,8 @@ namespace {
     try {
       for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string &a = args[i];
-        if (a == "--batch" || a == "--headless" || a == "--hdr") {
-          (a == "--batch" ? o.batch : a == "--headless" ? o.headless : o.backend_options.hdr) = true;
+        if (a == "--batch" || a == "--headless" || a == "--hdr" || a == "--new-ids") {
+          (a == "--batch" ? o.batch : a == "--headless" ? o.headless : a == "--hdr" ? o.backend_options.hdr : o.backend_options.new_ids) = true;
           continue;
         }
         if (i + 1 >= args.size()) {
@@ -226,10 +233,50 @@ namespace {
     return std::nullopt;
   }
 
+  /// GUID_CONSOLE_DISPLAY_STATE, defined here so that no import library has to provide it.
+  constexpr GUID console_display_state = {0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}};
+
+  /// How long a condition (session locked, display off, ...) held during the run.
+  class condition_t {
+  public:
+    void set(bool on) {
+      std::lock_guard lock(mutex_);
+      const auto now = steady_t::now();
+      if (on && !on_) {
+        since_ = now;
+        ++count_;
+      } else if (!on && on_) {
+        total_ms_ += ms_between(since_, now);
+      }
+      on_ = on;
+    }
+
+    bool on() const {
+      std::lock_guard lock(mutex_);
+      return on_;
+    }
+
+    json to_json() const {
+      std::lock_guard lock(mutex_);
+      const double ms = total_ms_ + (on_ ? ms_between(since_, steady_t::now()) : 0.0);
+      return {{"ms", ms}, {"times", count_}, {"at_end", on_}};
+    }
+
+  private:
+    mutable std::mutex mutex_;
+    bool on_ = false;
+    steady_t::time_point since_;
+    double total_ms_ = 0;
+    unsigned count_ = 0;
+  };
+
   /**
    * @brief Signals display configuration changes (WM_DISPLAYCHANGE, broadcast to every top-level window, also hidden
    *        ones), so waits re-check the topology when it changes instead of polling the CCD API, whose calls compete
    *        with Windows' own handling of the change.
+   *
+   * Also records when the session is locked, the console display is off (idle timeout) or the session is remote:
+   * Windows and the shell then handle display changes differently, so such measurements are not comparable.
    */
   class display_watch_t {
   public:
@@ -261,16 +308,41 @@ namespace {
       WaitForSingleObject(changed_, ms);
     }
 
+    /// The session is locked, the console display is off or the session is remote.
+    bool away() const {
+      return locked_.on() || display_off_.on() || remote_.on();
+    }
+
+    json environment() const {
+      return {{"session_locked", locked_.to_json()}, {"display_off", display_off_.to_json()}, {"remote_session", remote_.to_json()}};
+    }
+
   private:
     static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+      auto *self = reinterpret_cast<display_watch_t *>(GetWindowLongPtrW(h, GWLP_USERDATA));
       if (msg == WM_DISPLAYCHANGE) {
-        if (auto *self = reinterpret_cast<display_watch_t *>(GetWindowLongPtrW(h, GWLP_USERDATA)); self != nullptr) {
+        if (self != nullptr) {
           SetEvent(self->changed_);
         }
+      } else if (msg == WM_WTSSESSION_CHANGE && self != nullptr) {
+        if (wp == WTS_SESSION_LOCK || wp == WTS_SESSION_UNLOCK) {
+          self->locked_.set(wp == WTS_SESSION_LOCK);
+        } else if (wp == WTS_REMOTE_CONNECT || wp == WTS_REMOTE_DISCONNECT) {
+          self->remote_.set(wp == WTS_REMOTE_CONNECT);
+        }
+      } else if (msg == WM_POWERBROADCAST && wp == PBT_POWERSETTINGCHANGE && self != nullptr) {
+        const auto *s = reinterpret_cast<const POWERBROADCAST_SETTING *>(lp);
+        if (s != nullptr && IsEqualGUID(s->PowerSetting, console_display_state) && s->DataLength >= sizeof(DWORD)) {
+          DWORD state = 0;  // 0 off, 1 on, 2 dimmed
+          std::memcpy(&state, s->Data, sizeof(state));
+          self->display_off_.set(state == 0);
+        }
+        return TRUE;
       } else if (msg == WM_CLOSE) {
         DestroyWindow(h);
         return 0;
       } else if (msg == WM_DESTROY) {
+        WTSUnRegisterSessionNotification(h);
         PostQuitMessage(0);
         return 0;
       }
@@ -285,9 +357,15 @@ namespace {
       wc.lpszClassName = L"TesseraVddStressWatch";
       RegisterClassExW(&wc);
       HWND h = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, wc.hInstance, nullptr);
+      HPOWERNOTIFY display_state = nullptr;
       if (h != nullptr) {
         SetWindowLongPtrW(h, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
         hwnd_ = h;
+        locked_.set(session_locked());
+        remote_.set(GetSystemMetrics(SM_REMOTESESSION) != 0);
+        WTSRegisterSessionNotification(h, NOTIFY_FOR_THIS_SESSION);
+        // Sends the current state right away, then every change.
+        display_state = RegisterPowerSettingNotification(h, &console_display_state, DEVICE_NOTIFY_WINDOW_HANDLE);
       }
       SetEvent(ready_);
       if (h == nullptr) {
@@ -297,8 +375,25 @@ namespace {
       while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         DispatchMessageW(&msg);
       }
+      if (display_state != nullptr) {
+        UnregisterPowerSettingNotification(display_state);
+      }
     }
 
+    static bool session_locked() {
+      WTSINFOEXW *info = nullptr;
+      DWORD size = 0;
+      bool locked = false;
+      if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSSessionInfoEx, reinterpret_cast<LPWSTR *>(&info), &size) && info != nullptr) {
+        locked = info->Level == 1 && info->Data.WTSInfoExLevel1.SessionFlags == WTS_SESSIONSTATE_LOCK;
+        WTSFreeMemory(info);
+      }
+      return locked;
+    }
+
+    condition_t locked_;
+    condition_t display_off_;
+    condition_t remote_;
     HANDLE changed_ = nullptr;
     HANDLE ready_ = nullptr;
     std::atomic<HWND> hwnd_ {nullptr};
@@ -452,11 +547,11 @@ namespace {
 
   void write_csv(const fs::path &dir, const std::vector<event_t> &events, const probes_t &probes) {
     std::ofstream ev(dir / L"events.csv", std::ios::trunc);
-    ev << "t_ms,op,count,cycle,index,call_ms,visible_ms,ok,detail\n";
+    ev << "t_ms,op,count,cycle,index,call_ms,visible_ms,reapply_ms,ok,away,detail\n";
     for (const auto &e : events) {
       std::string detail = e.detail;
       std::replace(detail.begin(), detail.end(), ',', ';');
-      ev << e.t_ms << ',' << e.op << ',' << e.count << ',' << e.cycle << ',' << e.index << ',' << e.call_ms << ',' << e.visible_ms << ',' << (e.ok ? 1 : 0) << ',' << detail << '\n';
+      ev << e.t_ms << ',' << e.op << ',' << e.count << ',' << e.cycle << ',' << e.index << ',' << e.call_ms << ',' << e.visible_ms << ',' << e.reapply_ms << ',' << (e.ok ? 1 : 0) << ',' << (e.away ? 1 : 0) << ',' << detail << '\n';
     }
     std::ofstream gp(dir / L"gaps.csv", std::ios::trunc);
     gp << "probe,t_ms,duration_ms,during\n";
@@ -484,6 +579,21 @@ namespace {
     s["batch"] = o.batch;
     s["headless"] = o.headless;
     s["hdr"] = o.backend_options.hdr;
+    if (backend != nullptr && std::string(backend->name()) == "tessera") {
+      s["monitor_ids"] = o.backend_options.new_ids ? "new" : "stable";
+    }
+    std::vector<double> reapply;
+    std::size_t away = 0;
+    for (const auto &e : events) {
+      if (e.reapply_ms >= 0) {
+        reapply.push_back(e.reapply_ms);
+      }
+      away += e.away ? 1 : 0;
+    }
+    s["ops_while_away"] = away;
+    if (o.headless) {
+      s["headless_reapply_ms"] = distribution(reapply);
+    }
 
     bool targets_met = !aborted;
     json ops = json::array();
@@ -607,10 +717,57 @@ namespace {
   struct headless_t {
     bool anchored = false;
     std::uint32_t anchor = 0;
+    display::path_t anchor_path;  ///< The anchor as the CCD API names it; stays the primary.
     display::topology_t restore_to;  ///< Physical displays plus the anchor, as before switching off.
     std::unique_ptr<state::state_journal_t> journal;
     std::string entry;  ///< Journal entry of the change; recover.exe undoes it if this process dies.
   };
+
+  bool same_target(const display::path_t &a, const display::path_t &b) {
+    return a.adapter_path == b.adapter_path && a.target_id == b.target_id;
+  }
+
+  /// The active paths of `now` that are not physical displays (not active `before` the run), moved so that
+  /// `origin` is the primary.
+  result_t<display::topology_t> virtual_only(const display::topology_t &before, const display::topology_t &now, const display::path_t &origin) {
+    display::topology_t wanted;
+    for (const auto &p : now.paths) {
+      if (std::none_of(before.paths.begin(), before.paths.end(), [&](const display::path_t &q) {
+            return same_target(p, q);
+          })) {
+        wanted.paths.push_back(p);
+      }
+    }
+    const auto o = std::find_if(wanted.paths.begin(), wanted.paths.end(), [&](const display::path_t &p) {
+      return same_target(p, origin);
+    });
+    if (o == wanted.paths.end()) {
+      return make_error(tessera_code_e::unsafe, "headless", "the anchor display is not active");
+    }
+    const std::int32_t dx = o->position_x;
+    const std::int32_t dy = o->position_y;
+    for (auto &p : wanted.paths) {
+      p.position_x -= dx;
+      p.position_y -= dy;
+    }
+    return wanted;
+  }
+
+  /**
+   * @brief Switches the physical displays off again after Windows switched them back on, as a headless host must:
+   *        Windows applies its saved (or default "extend") layout for each new set of monitors.
+   */
+  status_t reapply_headless(const display::topology_t &before, const headless_t &h) {
+    auto now = display::capture();
+    if (!now) {
+      return now.error();
+    }
+    auto wanted = virtual_only(before, now.value(), h.anchor_path);
+    if (!wanted) {
+      return wanted.error();
+    }
+    return display::apply(wanted.value());
+  }
 
   status_t enter_headless(backend_t &b, const options_t &o, const display::topology_t &before, headless_t &h, std::size_t &base) {
     auto a = b.add(o.mode);
@@ -628,25 +785,21 @@ namespace {
       return now.error();
     }
     h.restore_to = now.value();
-    display::topology_t wanted;
-    for (const auto &p : now.value().paths) {
-      const bool physical = std::any_of(before.paths.begin(), before.paths.end(), [&](const display::path_t &q) {
-        return q.adapter_path == p.adapter_path && q.target_id == p.target_id;
+    const auto anchor = std::find_if(now.value().paths.begin(), now.value().paths.end(), [&](const display::path_t &p) {
+      return std::none_of(before.paths.begin(), before.paths.end(), [&](const display::path_t &q) {
+        return same_target(p, q);
       });
-      if (!physical) {
-        wanted.paths.push_back(p);
-      }
-    }
-    if (wanted.paths.empty()) {
+    });
+    if (anchor == now.value().paths.end()) {
       return make_error(tessera_code_e::unsafe, "headless", "no virtual display to keep active");
     }
+    h.anchor_path = *anchor;
     // The kept display becomes the primary (desktop origin).
-    const std::int32_t dx = wanted.paths.front().position_x;
-    const std::int32_t dy = wanted.paths.front().position_y;
-    for (auto &p : wanted.paths) {
-      p.position_x -= dx;
-      p.position_y -= dy;
+    auto kept = virtual_only(before, now.value(), h.anchor_path);
+    if (!kept) {
+      return kept.error();
     }
+    const display::topology_t &wanted = kept.value();
     auto path = state::state_journal_t::default_path();
     if (!path) {
       return path.error();
@@ -769,6 +922,7 @@ namespace {
         e.count = n;
         e.cycle = cycle;
         e.index = index;
+        e.away = watch.away();
         const auto t0 = steady_t::now();
         const status_t st = call();
         e.call_ms = ms_between(t0, steady_t::now());
@@ -779,7 +933,7 @@ namespace {
         } else {
           e.detail = st.error().to_string();
         }
-        if (o.headless && !physical_targets.empty()) {
+        if (o.headless && !physical_targets.empty() && !headless.entry.empty()) {
           // Windows applies its stored (or default "extend") topology for each new set of monitors, which can switch
           // the physical displays back on; a headless host must re-apply its own topology after each change.
           const auto now = active_targets();
@@ -788,8 +942,19 @@ namespace {
               })) {
             ++physical_reactivations;
             add_detail(e.detail, "Windows switched physical displays back on");
+            const auto r0 = steady_t::now();
+            if (auto st = reapply_headless(before.value(), headless); !st) {
+              add_detail(e.detail, "switching them off again failed: " + st.error().to_string());
+            } else {
+              std::string detail;
+              e.reapply_ms = wait_targets({}, physical_targets, r0, o, detail);
+              if (e.reapply_ms < 0) {
+                add_detail(e.detail, "switching them off again: " + detail);
+              }
+            }
           }
         }
+        e.away = e.away || watch.away();
         e.end_ms = ms_between(epoch, steady_t::now());
         events.push_back(e);
         if (!e.ok) {
@@ -904,6 +1069,7 @@ namespace {
     fs::create_directories(o.out, ec);
     write_csv(o.out, events, probes);
     json s = summarize(o, &backend, events, probes, keepalive_errors, g_abort);
+    s["environment"] = watch.environment();
     if (o.headless) {
       s["physical_reactivations"] = physical_reactivations;
     }
@@ -950,6 +1116,7 @@ namespace {
   int probe_only(const options_t &o) {
     const auto epoch = steady_t::now();
     probes_t probes(epoch, o.record_ms);
+    display_watch_t watch;
     probes.start();
     std::printf("probing for %u s (Ctrl+C stops)\n", o.seconds);
     nap(o.seconds * 1000);
@@ -957,7 +1124,8 @@ namespace {
     std::error_code ec;
     fs::create_directories(o.out, ec);
     write_csv(o.out, {}, probes);
-    const json s = summarize(o, nullptr, {}, probes, {}, false);
+    json s = summarize(o, nullptr, {}, probes, {}, false);
+    s["environment"] = watch.environment();
     std::ofstream(o.out / L"summary.json", std::ios::trunc) << s.dump(2) << '\n';
     std::printf("%s\n", s.dump(2).c_str());
     return 0;
@@ -986,6 +1154,10 @@ int wmain(int argc, wchar_t **argv) {
     std::fprintf(stderr, "ERROR: %s\n", o.error().to_string().c_str());
     usage();
     return 2;
+  }
+  // Measurements need the console display on and the session unlocked: no idle display-off or screen saver.
+  if (o.value().command == "run" || o.value().command == "hold" || o.value().command == "probe") {
+    SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
   }
   if (o.value().command == "run" || o.value().command == "hold") {
     return run(o.value());

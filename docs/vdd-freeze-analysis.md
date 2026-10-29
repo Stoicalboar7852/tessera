@@ -175,6 +175,11 @@ What the numbers show:
 The WPR traces (`*.etl`, 105 GB in total; file mode was a mistake for runs this long) are kept for the root-cause of
 the SudoVDA compose freeze if it is needed. Later runs use a ring buffer.
 
+**Caveat found later (2026-10-29):** vdd-stress gave every SudoVDA display a new random ID, so each add was a
+never-seen monitor for Windows: a new monitor device, new saved settings and a default layout. Tessera's first
+two acceptance runs did the same, and left thousands of leftover monitor devices (`docs/perf.md`). Part of SudoVDA's
+per-count growth may come from that rather than from the driver. A host reuses IDs, and the Tessera runs now do too.
+
 ## Consequences for Tessera's driver
 
 See `docs/phase-1-design.md`. In short:

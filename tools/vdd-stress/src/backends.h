@@ -99,6 +99,9 @@ namespace tessera::stress {
   struct backend_options_t {
     std::string mtt_config = "C:\\VirtualDisplayDriver\\vdd_settings.xml";  ///< MTT VDD settings file.
     bool hdr = false;  ///< tessera: add HDR10 monitors
+    /// tessera: a new random monitor ID for every add, so Windows sees a never-seen monitor each time (worst case;
+    /// each one leaves a monitor device and saved settings behind). Default: one stable ID per slot, like a host.
+    bool new_ids = false;
   };
 
   /// "tessera", "sudovda", "parsec" or "mtt".
