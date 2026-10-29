@@ -1,11 +1,11 @@
 # Project status: Tessera
 
-_Last updated: 2026-10-29_
+_Last updated: 2026-10-30_
 
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress.** Driver works: the VM test passes, and three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target (≤ 250 ms) is met in steady state but not during changes, because of Windows' own per-change cost. Waiting for a decision on the stall target | See "Phase 1 progress" and `docs/perf.md`. |
+| 1 – VDD | **Done, waiting for confirmation.** Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
 | 2–12 | Not started | |
 
 ## Phase 1 progress
@@ -79,9 +79,11 @@ _Last updated: 2026-10-29_
   - headless batches never brought the physical monitors back; one at a time, Windows did after 410 of 800 adds,
     and 26 adds took over 3 s including switching them off again;
   - Explorer crashed once (four times in run 2); turning off "taskbar on all displays" brings no consistent benefit.
-- **Open:**
-  - a decision on the stall target (design risk #1);
-  - the Phase 1 summary.
+- **Stall target decided** (2026-10-30, ADR 0006): no stall over 250 ms in steady state; during a display change,
+  one freeze no worse than the run-3 baseline. From Phase 2 on, the host batches display changes, never chains them,
+  and uses a stable ID per client monitor.
+- **Not verified** (listed in `docs/phase-1-summary.md`): `SET_RENDER_ADAPTER`, re-claim by ID within the grace
+  period, 119.88 Hz on real hardware, Windows 10, and recovery from a GPU reset.
 
 ## Phase 0 acceptance
 
