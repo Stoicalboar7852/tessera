@@ -11,12 +11,16 @@ endif()
 add_library(tessera_common STATIC
   src/crypto.cpp
   src/display_topology.cpp
+  src/multistream.cpp
   src/state_journal.cpp
   src/state_restore.cpp
   src/vdd_client.cpp
   src/win32.cpp)
 # drivers/vdd/include: the driver's control interface (plain C), used by vdd_client.
-target_include_directories(tessera_common PUBLIC include "${CMAKE_CURRENT_LIST_DIR}/../../drivers/vdd/include")
+# protocol/include: Tessera's protocol extensions (plain C), shared with common-c.
+target_include_directories(tessera_common PUBLIC include
+  "${CMAKE_CURRENT_LIST_DIR}/../../drivers/vdd/include"
+  "${CMAKE_CURRENT_LIST_DIR}/../../protocol/include")
 target_link_libraries(tessera_common
   PUBLIC nlohmann_json::nlohmann_json setupapi
   PRIVATE bcrypt shell32 ole32 advapi32 user32)

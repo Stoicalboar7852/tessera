@@ -85,6 +85,14 @@ namespace tessera {
       return std::get<0>(std::move(v_));
     }
 
+    T &operator*() & {
+      return std::get<0>(v_);
+    }
+
+    const T &operator*() const & {
+      return std::get<0>(v_);
+    }
+
     T *operator->() {
       return &std::get<0>(v_);
     }

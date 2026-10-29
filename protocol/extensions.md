@@ -19,4 +19,4 @@ Every new feature is negotiated, and a missing feature on either side never brea
 
 | Name | Version | Phase | Summary | Status |
 |---|---|---|---|---|
-| — | — | — | No extensions defined yet (Phase 2 defines multi-stream). | — |
+| `multistream` | 1 | 2 | One video stream per client monitor in one session (`multistream.md`, ADR 0007). Per-client permission: "Multi-display streaming", on by default. | In progress |

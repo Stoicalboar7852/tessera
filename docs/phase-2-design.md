@@ -1,7 +1,7 @@
 # Phase 2 design: protocol and host multi-stream
 
-_Status: **proposal, waiting for approval** (2026-10-30). Nothing below is implemented. The wire protocol is in
-ADR 0007 (proposed with this design)._
+_Status: **approved 2026-10-30** as proposed, with decisions 2–4 as recommended; decision 5 is open (latency on
+localhost until a LAN client is available). The wire protocol is ADR 0007; the spec is `protocol/multistream.md`._
 
 ## Goal and acceptance (brief §8, F2, §4.3, §4.5)
 
@@ -168,10 +168,10 @@ the rest renormalised. This is computed in common-c so every client splits the s
 The clients' own copies of moonlight-common-c (Qt, Android and iOS submodules) switch to `/common-c` in the phase that
 touches each client (Qt in Phase 3). Phase 2 doesn't change any client app.
 
-## Driver (`drivers/vdd`), small
+## Driver (`drivers/vdd`): no change
 
-The ADD descriptor gains the monitor's physical size, derived from the client's DPI, and the EDID carries it. Windows
-then recommends a scale close to the client monitor's. This is interface v3; v2 requests are still accepted.
+The ADD descriptor already carries the monitor's physical size (`width_mm`, `height_mm`, interface v2), and the EDID
+reports it. The host derives it from the client's DPI, so Windows recommends a scale close to the client monitor's.
 
 ## Test client and test harness
 
@@ -232,8 +232,7 @@ use, typically one display is busy (a game or a video) and the others are mostly
 2. common-c: the instance build with its symbol check, SETUP/ANNOUNCE, control and input messages.
 3. Host: the per-display capture context, per-stream video state and broadcast, RTSP and nvhttp hooks.
 4. Host: `display_session` (VDD, layout, primary, journal), the encoder probe, permissions and config.
-5. Driver v3 (physical size in the EDID).
-6. The test client and the harness; acceptance runs; `docs/perf.md` latency rows; the Phase 2 summary.
+5. The test client and the harness; acceptance runs; `docs/perf.md` latency rows; the Phase 2 summary.
 
 ## Risks
 

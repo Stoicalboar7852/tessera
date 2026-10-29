@@ -1,6 +1,6 @@
 # ADR 0007: Multi-stream protocol extension
 
-- **Status:** Proposed (2026-10-30, with `docs/phase-2-design.md`)
+- **Status:** Accepted (2026-10-30, with `docs/phase-2-design.md`)
 
 ## Context
 
