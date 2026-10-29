@@ -5,8 +5,9 @@ _Last updated: 2026-10-30_
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **Done, waiting for confirmation.** Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
-| 2–12 | Not started | |
+| 1 – VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
+| 2 – Protocol and host multi-stream | **Design proposed, waiting for approval** (`docs/phase-2-design.md`, ADR 0007 proposed) | Phase 1 confirmed 2026-10-30. |
+| 3–12 | Not started | |
 
 ## Phase 1 progress
 - **Freeze analysis** (`docs/vdd-freeze-analysis.md`): source and issue-tracker review, plus measurements on the

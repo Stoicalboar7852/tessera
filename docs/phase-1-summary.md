@@ -1,6 +1,6 @@
 # Phase 1 summary: virtual display driver
 
-_Completed 2026-10-30, waiting for confirmation. Details are in `docs/STATUS.md`, `docs/perf.md`,
+_Completed and confirmed 2026-10-30. Details are in `docs/STATUS.md`, `docs/perf.md`,
 `docs/vdd-freeze-analysis.md`, `docs/phase-1-design.md` and ADRs 0005–0006._
 
 ## Acceptance
