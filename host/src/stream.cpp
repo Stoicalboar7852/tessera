@@ -2310,8 +2310,9 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::video, stream->video.ping_payload, stream->video.peer, config::stream.ping_timeout);
-    if (error < 0) {
+    // (Not named `error`: that would hide BOOST_LOG's severity.)
+    const auto ping_status = recv_ping(session, ref, socket_e::video, stream->video.ping_payload, stream->video.peer, config::stream.ping_timeout);
+    if (ping_status < 0) {
       BOOST_LOG(error) << "Stream "sv << stream->index << ": no ping from the client; stream not started"sv;
       stream->stop_reason = TESSERA_REASON_NONE;
       return;
