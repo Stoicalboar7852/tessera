@@ -1,8 +1,7 @@
 # Phase 1 design: Tessera virtual display driver
 
-_Status: **proposal, waiting for approval** (2026-10-26). Nothing below is implemented yet except the measurement
-tools (`tools/vdd-stress`). Based on `docs/vdd-freeze-analysis.md`; the measured results may adjust details, but
-not the structure._
+_Status: **approved 2026-10-27 and implemented**; results in `docs/phase-1-summary.md`. Based on
+`docs/vdd-freeze-analysis.md`. The stall target was later split (ADR 0006)._
 
 ## Goal and acceptance (brief, Phase 1)
 
@@ -116,7 +115,7 @@ host service / tools                     WUDFHost.exe (LocalService)
 
 | Risk | Mitigation |
 |---|---|
-| Windows' own per-arrival cost (WM_DISPLAYCHANGE, DWM swap-chain re-creation) exceeds 250 ms at 8 displays, whatever the driver does | Measure it with the third-party drivers first (this run). Arrive monitors back to back in one request; if needed, report them only after the host has set the topology. If it still misses the target, record that as a platform limit in perf.md with numbers, and ask you rather than hide it. |
+| Windows' own per-arrival cost (WM_DISPLAYCHANGE, DWM swap-chain re-creation) exceeds 250 ms at 8 displays, whatever the driver does | Measure it with the third-party drivers first (this run). Arrive monitors back to back in one request; if needed, report them only after the host has set the topology. If it still misses the target, record that as a platform limit in perf.md with numbers, and ask you rather than hide it. **Outcome:** it did; the target was split into steady state and per-change freezes (ADR 0006). |
 | The dev PC crashes on its own (0x1C7/0x3B/0x1E earlier), which muddies stress results | Resumable harness and crash tagging. Repeat any run that crashed; separate the effect of a crash from the driver in perf.md. A memory test or EXPO off would remove the doubt (your call). |
 | NVIDIA-specific behaviour (Apollo #179 periodic stutter with a DP monitor) | The hold run detects periodic stalls; results are recorded per GPU. An explicit render adapter avoids cross-GPU copies. |
 | IddCx differences between Windows 10 and 11 (HDR needs 1.10) | Version-gated features, with the HDR path off when unavailable. CI builds against the WDK's IddCx headers; runtime checks use `IDD_IS_FUNCTION_AVAILABLE`. |
