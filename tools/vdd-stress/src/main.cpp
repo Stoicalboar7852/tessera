@@ -943,8 +943,8 @@ namespace {
             ++physical_reactivations;
             add_detail(e.detail, "Windows switched physical displays back on");
             const auto r0 = steady_t::now();
-            if (auto st = reapply_headless(before.value(), headless); !st) {
-              add_detail(e.detail, "switching them off again failed: " + st.error().to_string());
+            if (auto off = reapply_headless(before.value(), headless); !off) {
+              add_detail(e.detail, "switching them off again failed: " + off.error().to_string());
             } else {
               std::string detail;
               e.reapply_ms = wait_targets({}, physical_targets, r0, o, detail);
