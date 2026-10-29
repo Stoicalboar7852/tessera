@@ -18,8 +18,8 @@ split across the streams by pixel rate, and frame pacing and FEC stay per stream
 2. **Stock clients:** the latest stock Moonlight release pairs, streams for 2 minutes and quits, and the host behaves
    as upstream does (one stream, the configured display).
 3. **Stock hosts:** the test client against the latest stock Sunshine release falls back to one stream and works.
-4. **Latency (§4.5):** extra latency per additional display, measured per stream for 1, 2, 3 and 4 streams at
-   1080p60, goes in `docs/perf.md`. The target is ≤ 2 ms per additional display.
+4. **Latency (§4.5):** extra latency per additional display, against a stock Sunshine + Moonlight baseline on the
+   same machines, goes in `docs/perf.md` (see "Latency budget"). The target is ≤ 2 ms per additional display.
 5. **Display lifecycle:** displays are added in one request and arranged as the client's monitors. They are removed
    when the app quits, and the host topology is then restored exactly (`topoctl compare`). The same holds after the
    host is killed mid-session (watchdog).
@@ -191,6 +191,35 @@ then recommends a scale close to the client monitor's. This is interface v3; v2 
   
   Stock Moonlight and stock Sunshine are downloaded portable releases, run one at a time on this PC over localhost.
 
+## Latency budget
+
+The owner's stock Sunshine + Moonlight setup shows about 2–5 ms in total, so 2 ms per extra display would be a large
+share. Where extra displays can add latency, in the worst case where every display changes in the same frame:
+
+| Stage | Extra per additional 1080p60 display | Why |
+|---|---|---|
+| Encode | about 1–1.5 ms (estimate) | The RTX 4060 Ti has **one** NVENC engine (NVIDIA's support matrix), so frames that arrive together are encoded in turn. |
+| Network send | about 0.35 ms at 20 Mbps, 0.8 ms at 50 Mbps | One 1 Gbit/s link: frames that are ready together go out one after another. |
+| Capture and colour conversion | small | Separate GPU work per display, run in parallel. |
+| Client decode | depends on the client | One decoder per stream (Phase 3). |
+
+Nothing is added for displays that don't change: the host only encodes a display when it has a new frame. In desktop
+use, typically one display is busy (a game or a video) and the others are mostly static.
+
+**Measurement:**
+- The test client reports, per stream, the same figures as Moonlight's statistics overlay: host processing latency,
+  network latency and decode time.
+- The baseline is stock Sunshine with stock Moonlight streaming one display, on the same machines.
+- Tessera runs with 1–4 streams in two cases: worst (an animated window on every display) and typical (one animated,
+  the others static).
+
+**Target:**
+- ≤ 2 ms per additional display (brief), and the aim is ≤ 1 ms in the typical case.
+- If the worst case misses 2 ms at 1080p60, the options, cheapest first:
+  - encode and send the display with input focus first;
+  - a faster encoder preset for the other displays;
+  - encoding some displays on the AMD iGPU's encoder (a second engine, at the cost of a cross-GPU copy).
+
 ## Order of work
 
 1. ADR 0007, `protocol.h`, `protocol/multistream.md`; the pure host parsers and the common-c pure functions, with
@@ -207,7 +236,7 @@ then recommends a scale close to the client monitor's. This is interface v3; v2 
 |---|---|
 | Compiling common-c's video path several times is unusual, and an upstream change can break it | Upstream files stay unchanged; the CI symbol check catches new shared references; the refactor is the fallback. |
 | Hooks in `stream.cpp` and `video.cpp` (large upstream files) grow and make merges hard | New logic lives in `host/src/tessera/`; hooks pass a stream index or a display name. The diff to upstream files is measured and kept small. |
-| One broadcast thread sends every stream's frames in turn, so later streams wait. About 0.35 ms per 1080p frame, but several ms at 4K and high bitrates | Measured in acceptance item 4. If it misses ≤ 2 ms at 1080p60, or stalls at 4K, give each stream its own sender thread with a shared pacing budget. |
+| Streams take turns on the single NVENC engine and on the network link, so the last of several simultaneous frames waits (see "Latency budget"; several ms at 4K and high bitrates) | Measured against the stock baseline in acceptance item 4. If it misses the target, the options are listed under "Latency budget", starting with sending the focused display first. |
 | Capturing several IddCx displays with Desktop Duplication, and GPU copies between adapters | The render adapter is set to the encoding GPU (this exercises the `SET_RENDER_ADAPTER` IOCTL, unverified in Phase 1); WGC remains Sunshine's alternative. |
 | Encoder session limits (NVIDIA consumer cards limit concurrent NVENC sessions) | Probed at startup and advertised; a stream that still fails is reported to the client by a status message, and the others continue. Never silent. |
 | Display changes freeze the desktop (ADR 0006) | One batched add, then one layout change. About 2 s at session start, inside the baseline. Nothing is chained. |
@@ -232,5 +261,6 @@ then recommends a scale close to the client monitor's. This is interface v3; v2 
    restored afterwards), so apps open where the client looks. The alternative is that the host's primary stays as it
    is.
 4. **common-c approach:** compile the video path once per extra stream (proposed), or refactor it.
-5. **Is a second PC or laptop available** on your LAN for one latency run? Otherwise the latency numbers are
-   localhost-only for now.
+5. **Is a second PC or laptop available** on your LAN for one latency run, ideally the client you used with stock
+   Moonlight? Localhost hides the network part of the budget (it is much faster than a 1 Gbit/s link), so without
+   it the latency numbers are localhost-only for now.
