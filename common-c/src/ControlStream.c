@@ -1374,6 +1374,10 @@ static void controlReceiveThreadFunc(void* context) {
                 free(ctlHdr);
                 return;
             }
+            else {
+                // Tessera: per-stream messages (protocol/multistream.md section 5); others are ignored as before
+                tesseraHandleControlMessage(ctlHdr->type, (const uint8_t*)(ctlHdr + 1), packetLength - (int)sizeof(*ctlHdr));
+            }
 
             free(ctlHdr);
         }
@@ -1699,6 +1703,11 @@ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t chan
     }
 
     return 0;
+}
+
+// Tessera: sends one of its own message types (protocol/multistream.md section 5), reliably
+bool tesseraSendControlMessage(unsigned short type, const void* payload, int length, uint8_t channelId) {
+    return sendMessageAndForget((short)type, (short)length, payload, channelId, ENET_PACKET_FLAG_RELIABLE, false);
 }
 
 // Called by the input stream to flush queued packets before a batching wait

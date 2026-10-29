@@ -87,6 +87,7 @@ void LiStopConnection(void) {
     }
     if (stage == STAGE_VIDEO_STREAM_START) {
         Limelog("Stopping video stream...");
+        tesseraStopVideoStreams(); // Tessera: extra streams first
         stopVideoStream();
         stage--;
         Limelog("done\n");
@@ -105,6 +106,7 @@ void LiStopConnection(void) {
     }
     if (stage == STAGE_VIDEO_STREAM_INIT) {
         Limelog("Cleaning up video stream...");
+        tesseraDestroyVideoStreams(); // Tessera: extra streams first
         destroyVideoStream();
         stage--;
         Limelog("done\n");
@@ -466,6 +468,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     Limelog("Initializing video stream...");
     ListenerCallbacks.stageStarting(STAGE_VIDEO_STREAM_INIT);
     initializeVideoStream();
+    tesseraInitializeVideoStreams(); // Tessera: extra streams, if the host accepted any
     stage++;
     LC_ASSERT(stage == STAGE_VIDEO_STREAM_INIT);
     ListenerCallbacks.stageComplete(STAGE_VIDEO_STREAM_INIT);
@@ -500,6 +503,8 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         ListenerCallbacks.stageFailed(STAGE_VIDEO_STREAM_START, err);
         goto Cleanup;
     }
+    // Tessera: extra streams; one that fails to start stops alone and is reported
+    tesseraStartVideoStreams(renderContext, drFlags);
     stage++;
     LC_ASSERT(stage == STAGE_VIDEO_STREAM_START);
     ListenerCallbacks.stageComplete(STAGE_VIDEO_STREAM_START);

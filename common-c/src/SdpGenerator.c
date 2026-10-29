@@ -122,6 +122,11 @@ static int addAttributeString(PSDP_OPTION* head, char* name, const char* payload
     return addAttributeBinary(head, name, payload, (int)strlen(payload));
 }
 
+// Tessera: lets TesseraStreams.c add attributes without knowing SDP_OPTION
+static int addTesseraAttribute(void* head, char* name, const char* payload) {
+    return addAttributeString((PSDP_OPTION*)head, name, payload);
+}
+
 static int addGen3Options(PSDP_OPTION* head, char* addrStr) {
     int payloadInt;
     int err = 0;
@@ -335,7 +340,8 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     err |= addAttributeString(&optionHead, "x-nv-video[0].framesWithInvalidRefThreshold", "0");
 
     // 20% of the video bitrate will added to the user-specified bitrate for FEC
-    adjustedBitrate = (int)(StreamConfig.bitrate * 0.80);
+    // Tessera: with several streams, stream 0's share of the bitrate
+    adjustedBitrate = (int)(tesseraStreamBitrateKbps(0) * 0.80);
 
     // Use more strict bitrate logic when streaming remotely. The theory here is that remote
     // streaming is much more bandwidth sensitive. Someone might select 5 Mbps because that's
@@ -368,7 +374,7 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
         // Send the configured bitrate to Sunshine hosts, so they can adjust for dynamic FEC percentage
         if (IS_SUNSHINE()) {
-            snprintf(payloadStr, sizeof(payloadStr), "%u", StreamConfig.bitrate);
+            snprintf(payloadStr, sizeof(payloadStr), "%d", tesseraStreamBitrateKbps(0)); // Tessera: stream 0's share
             err |= addAttributeString(&optionHead, "x-ml-video.configuredBitrateKbps", payloadStr);
         }
     }
@@ -534,6 +540,9 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         snprintf(payloadStr, sizeof(payloadStr), "%d", (StreamConfig.colorSpace << 1) | StreamConfig.colorRange);
         err |= addAttributeString(&optionHead, "x-nv-video[0].encoderCscMode", payloadStr);
     }
+
+    // Tessera: attributes of the extra streams (protocol/multistream.md section 3)
+    err |= tesseraAddSdpAttributes(addTesseraAttribute, &optionHead);
 
     if (err == 0) {
         return optionHead;

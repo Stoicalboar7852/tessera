@@ -465,6 +465,10 @@ static void inputSendThreadProc(void* context) {
 
             lastMousePacketTime = now;
         }
+        // Tessera: absolute mouse position on one of several streams; like the above, send only the latest
+        else if (holder->packet.header.magic == LE32(TESSERA_MOUSE_POSITION_MAGIC)) {
+            tesseraFillMousePosition(&holder->packet.header);
+        }
         // If it's a pen packet, we should only send the latest move or hover events
         else if (holder->packet.header.magic == LE32(SS_PEN_MAGIC) && TOUCH_EVENT_IS_BATCHABLE(holder->packet.pen.eventType)) {
             uint64_t now = PltGetMillis();
@@ -767,6 +771,35 @@ int LiSendMouseMoveEvent(short deltaX, short deltaY) {
         err = 0;
     }
 
+    return err;
+}
+
+// Tessera: queues an input packet of its own (protocol/multistream.md section 6) behind earlier input
+int tesseraQueueInputPacket(const void* packet, int length, uint8_t channelId) {
+    PPACKET_HOLDER holder;
+    int err;
+
+    if (!initialized) {
+        return -2;
+    }
+    if (length < (int)sizeof(NV_INPUT_HEADER) || length > (int)sizeof(holder->packet)) {
+        return -1;
+    }
+
+    holder = allocatePacketHolder(0);
+    if (holder == NULL) {
+        return -1;
+    }
+    holder->channelId = channelId;
+    holder->enetPacketFlags = ENET_PACKET_FLAG_RELIABLE;
+    memcpy(&holder->packet, packet, length);
+
+    err = LbqOfferQueueItem(&packetQueue, holder, &holder->entry);
+    if (err != LBQ_SUCCESS) {
+        LC_ASSERT(err == LBQ_BOUND_EXCEEDED);
+        Limelog("Input queue reached maximum size limit\n");
+        freePacketHolder(holder);
+    }
     return err;
 }
 

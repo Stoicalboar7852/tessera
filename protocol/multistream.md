@@ -67,7 +67,11 @@ less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-li
   stream 0.
   - **Per stream:** `clientViewportWd`, `clientViewportHt`, `maxFPS`, `clientRefreshRateX100`,
     `videoEncoderSlicesPerFrame`, `maxNumReferenceFrames`, `dynamicRangeMode`, `bw.maximumBitrateKbps`,
-    `fec.minRequiredFecPackets`.
+    `fec.minRequiredFecPackets`, plus `x-ml-video[i].configuredBitrateKbps` (the stream's share before the FEC
+    allowance, as `x-ml-video.configuredBitrateKbps` is for stream 0).
+  - The client also sends `x-tessera.streams:<k>` with the count it will run (≤ the DESCRIBE value).
+  - **Format:** the negotiated codec for every stream, 10-bit only for streams whose display is HDR
+    (`dynamicRangeMode`).
   - **Taken from stream 0:** codec (`bitStreamFormat`), `packetSize`, `encoderCscMode`, chroma sampling, QoS type.
   - **Bitrate:** the client splits its total bitrate by pixel rate (width × height × fps), with at least
     1000 kbit/s per stream. The host caps the sum at its configured maximum, scaling every stream alike.
@@ -79,8 +83,10 @@ less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-li
   came from.
 - **Packets:** packetization, RTP and FEC are as for stream 0, and each stream has its own sequence numbers and frame
   indices.
-- **Encryption:** extra streams are always encrypted (`SS_ENC_VIDEO` format), whatever the session negotiated for
-  stream 0. The IV is the stream's 64-bit packet counter (bytes 0–7, little-endian), then `00 00 <i> 'V'`.
+- **Encryption:** every stream of a multistream session is encrypted (`SS_ENC_VIDEO` format), stream 0 included, so
+  all streams share stream 0's packet size (which leaves room for the encryption header). The host offers
+  `SS_ENC_VIDEO` in DESCRIBE for such sessions whatever its encryption mode, and the client turns it on. The IV is
+  the stream's 64-bit packet counter (bytes 0–7, little-endian), then `00 00 <i> 'V'`.
 
 ## 5. Control messages (ENet control stream, encrypted like the rest)
 
@@ -93,7 +99,10 @@ less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-li
 
 The legacy messages (IDR, reference-frame invalidation, HDR mode, loss statistics) keep meaning stream 0. Messages
 naming stream 0 or a stream ≥ k are ignored. A stream that stops (encoder or capture failure) is reported with its
-reason; the other streams continue.
+reason; the other streams continue. Extra streams have no LTR acknowledgements or loss statistics in v1.
+
+Reasons 10 (`decoder-failed`) and 11 (`no-video`) are client-side only: common-c reports them to its application
+when an extra stream's decoder can't start or no complete frame arrives.
 
 ## 6. Input
 

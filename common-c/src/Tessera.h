@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "Limelight.h"
 #include "../../protocol/include/tessera/protocol.h"
 
 #ifdef __cplusplus
@@ -44,6 +45,42 @@ int LiTesseraFormatDisplayList(const TESSERA_DISPLAY* displays, int count, char*
 // TESSERA_MIN_STREAM_BITRATE_KBPS where the total allows. Rounding leftovers go to display 0. The results add up to
 // totalKbps.
 void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int count, int* outKbps);
+
+// Notifications about extra streams. They run on library threads and must not block.
+typedef struct _TESSERA_CALLBACKS {
+    // An extra stream started (TESSERA_STREAM_RUNNING) or stopped (TESSERA_STREAM_STOPPED, with an
+    // enum tessera_reason_e). The other streams carry on.
+    void (*streamStatus)(int stream, int state, int reason);
+
+    // The host turned HDR on or off for an extra stream (stream 0 uses CONNECTION_LISTENER_CALLBACKS.setHdrMode).
+    void (*setHdrMode)(int stream, bool enabled);
+} TESSERA_CALLBACKS, *PTESSERA_CALLBACKS;
+
+// Call before LiStartConnection() to stream several displays. displays[0] is the primary monitor: it is stream 0 and
+// uses the STREAM_CONFIGURATION and decoder callbacks given to LiStartConnection(). Display n (1 .. count-1) uses
+// extraDecoderCallbacks[n-1] and extraRendererContexts[n-1] (either array may be NULL; missing callbacks do nothing).
+// The configured bitrate is split across the streams the host accepts. count is 1 to TESSERA_MAX_STREAMS; 1 turns
+// multistream off. Returns 0, or -1 if the arguments are invalid. The configuration stays until LiTesseraReset().
+int LiTesseraConfigure(const TESSERA_DISPLAY* displays, int count,
+                       const DECODER_RENDERER_CALLBACKS* extraDecoderCallbacks, void* const* extraRendererContexts,
+                       const TESSERA_CALLBACKS* callbacks);
+
+// Back to a plain single-stream client.
+void LiTesseraReset(void);
+
+// Streams in the current connection: 1 until the host has accepted more (after LiStartConnection() returns).
+int LiTesseraGetStreamCount(void);
+
+// Per-stream versions of the pull-renderer and statistics functions in Limelight.h (stream 0 included).
+bool LiTesseraWaitForNextVideoFrame(int stream, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
+bool LiTesseraPollNextVideoFrame(int stream, VIDEO_FRAME_HANDLE* frameHandle, PDECODE_UNIT* decodeUnit);
+void LiTesseraWakeWaitForVideoFrame(int stream);
+void LiTesseraCompleteVideoFrame(int stream, VIDEO_FRAME_HANDLE handle, int drStatus);
+const RTP_VIDEO_STATS* LiTesseraGetRTPVideoStats(int stream);
+
+// Absolute mouse position on one stream's display: x and y in 0 .. referenceWidth/Height-1, where the reference is
+// the client's view of that stream. With a single stream this is LiSendMousePositionEvent().
+int LiTesseraSendMousePosition(int stream, short x, short y, short referenceWidth, short referenceHeight);
 
 #ifdef __cplusplus
 }

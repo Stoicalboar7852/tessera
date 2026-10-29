@@ -1,5 +1,5 @@
 // Tests for Tessera's additions to moonlight-common-c. Exits with the number of failed checks.
-#include "Tessera.h"
+#include "Limelight-internal.h"
 #include "multistream_vectors.h"
 
 #include <stdio.h>
@@ -107,10 +107,125 @@ static void testSplitsTheBitrateByPixelRate(void) {
     CHECK(kbps[0] == 668 && kbps[1] == 666 && kbps[2] == 666);
 }
 
+// Collects SDP attributes from tesseraAddSdpAttributes()
+static struct {
+    char names[64][64];
+    char values[64][32];
+    int count;
+} sdp;
+
+static int collectAttribute(void* head, char* name, const char* payload) {
+    (void)head;
+    if (sdp.count >= 64) {
+        return -1;
+    }
+    snprintf(sdp.names[sdp.count], sizeof(sdp.names[0]), "%s", name);
+    snprintf(sdp.values[sdp.count], sizeof(sdp.values[0]), "%s", payload);
+    sdp.count++;
+    return 0;
+}
+
+static const char* sdpValue(const char* name) {
+    for (int i = 0; i < sdp.count; i++) {
+        if (strcmp(sdp.names[i], name) == 0) {
+            return sdp.values[i];
+        }
+    }
+    return "";
+}
+
+static void configureTwoDisplays(bool secondHdr) {
+    TESSERA_DISPLAY displays[2];
+
+    displays[0] = makeDisplay(1, 2560, 1440, 60, 1);
+    displays[1] = makeDisplay(2, 1920, 1080, 60, 1);
+    displays[1].x = 2560;
+    displays[1].hdr = secondHdr;
+    CHECK(LiTesseraConfigure(displays, 2, NULL, NULL, NULL) == 0);
+
+    memset(&StreamConfig, 0, sizeof(StreamConfig));
+    StreamConfig.bitrate = TESSERA_TV_SPLIT_TOTAL_KBPS;
+    EncryptionFeaturesSupported = SS_ENC_CONTROL_V2 | SS_ENC_VIDEO;
+    NegotiatedVideoFormat = VIDEO_FORMAT_H265_MAIN10;
+}
+
+static void testNegotiatesStreamsFromDescribe(void) {
+    // A host without the extension
+    configureTwoDisplays(false);
+    tesseraParseDescribe("a=x-ss-general.featureFlags:3\r\n");
+    CHECK(LiTesseraGetStreamCount() == 1);
+    CHECK(tesseraStreamBitrateKbps(0) == TESSERA_TV_SPLIT_TOTAL_KBPS);
+
+    // A host that can't encrypt video can't run extra streams
+    configureTwoDisplays(false);
+    EncryptionFeaturesSupported = SS_ENC_CONTROL_V2;
+    tesseraParseDescribe("a=x-tessera.streams:4\r\n");
+    CHECK(LiTesseraGetStreamCount() == 1);
+
+    // Two configured, four offered: two, stream 0 is encrypted too, and the bitrate is split
+    configureTwoDisplays(false);
+    tesseraParseDescribe("a=x-tessera.streams:4\r\n");
+    CHECK(LiTesseraGetStreamCount() == 2);
+    CHECK((StreamConfig.encryptionFlags & ENCFLG_VIDEO) != 0);
+    CHECK(tesseraStreamBitrateKbps(0) == TESSERA_TV_SPLIT_KBPS_0);
+    CHECK(tesseraStreamBitrateKbps(1) == TESSERA_TV_SPLIT_KBPS_1);
+
+    // An SDR display gets the 8-bit format of the negotiated codec, an HDR one keeps 10-bit
+    sdp.count = 0;
+    CHECK(tesseraAddSdpAttributes(collectAttribute, NULL) == 0);
+    CHECK(strcmp(sdpValue("x-tessera.streams"), "2") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].clientViewportWd"), "1920") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].clientViewportHt"), "1080") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].maxFPS"), "60") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].clientRefreshRateX100"), "6000") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].dynamicRangeMode"), "0") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].maxNumReferenceFrames"), "1") == 0);
+    CHECK(strcmp(sdpValue("x-nv-vqos[1].bw.maximumBitrateKbps"), "14400") == 0); // 80% of 18000
+    CHECK(strcmp(sdpValue("x-ml-video[1].configuredBitrateKbps"), "18000") == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[2].clientViewportWd"), "") == 0);
+
+    configureTwoDisplays(true);
+    tesseraParseDescribe("a=x-tessera.streams:2\r\n");
+    sdp.count = 0;
+    CHECK(tesseraAddSdpAttributes(collectAttribute, NULL) == 0);
+    CHECK(strcmp(sdpValue("x-nv-video[1].dynamicRangeMode"), "1") == 0);
+
+    // Fewer offered than configured
+    {
+        TESSERA_DISPLAY displays[3];
+
+        displays[0] = makeDisplay(1, 1920, 1080, 60, 1);
+        displays[1] = makeDisplay(2, 1920, 1080, 60, 1);
+        displays[2] = makeDisplay(3, 1920, 1080, 60, 1);
+        CHECK(LiTesseraConfigure(displays, 3, NULL, NULL, NULL) == 0);
+        StreamConfig.bitrate = 30000;
+        EncryptionFeaturesSupported = SS_ENC_VIDEO;
+        tesseraParseDescribe("a=x-tessera.streams:2\r\n");
+        CHECK(LiTesseraGetStreamCount() == 2);
+        CHECK(tesseraStreamBitrateKbps(0) == 15000);
+    }
+
+    // Single display: multistream stays off
+    {
+        TESSERA_DISPLAY display = makeDisplay(1, 1920, 1080, 60, 1);
+
+        CHECK(LiTesseraConfigure(&display, 1, NULL, NULL, NULL) == 0);
+        tesseraParseDescribe("a=x-tessera.streams:4\r\n");
+        CHECK(LiTesseraGetStreamCount() == 1);
+        sdp.count = 0;
+        CHECK(tesseraAddSdpAttributes(collectAttribute, NULL) == 0);
+        CHECK(sdp.count == 0);
+    }
+
+    CHECK(LiTesseraConfigure(NULL, 1, NULL, NULL, NULL) == -1);
+    LiTesseraReset();
+}
+
 int main(void) {
     testFormatsTheSharedTestVector();
     testRejectsInvalidDisplayLists();
     testSplitsTheBitrateByPixelRate();
+    testNegotiatesStreamsFromDescribe();
 
     if (failures == 0) {
         printf("tessera_common_c_tests: all checks passed\n");

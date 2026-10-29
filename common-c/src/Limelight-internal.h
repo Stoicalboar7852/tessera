@@ -151,3 +151,6 @@ int initializeInputStream(void);
 void destroyInputStream(void);
 int startInputStream(void);
 int stopInputStream(void);
+
+// Tessera: multistream hooks (protocol/multistream.md)
+#include "TesseraInternal.h"

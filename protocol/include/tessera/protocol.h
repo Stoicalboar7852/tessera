@@ -80,11 +80,13 @@ enum tessera_reason_e {
   TESSERA_REASON_CAPTURE_FAILED = 7,  /**< Capturing the stream's display failed. */
   TESSERA_REASON_INVALID_REQUEST = 8,  /**< The display list or stream parameters failed validation. */
   TESSERA_REASON_UNSUPPORTED = 9,  /**< The host's encoder or capture method can't run several streams. */
+  TESSERA_REASON_DECODER_FAILED = 10,  /**< Client side only: the stream's decoder couldn't start. */
+  TESSERA_REASON_NO_VIDEO = 11,  /**< Client side only: the stream received no (complete) video. */
 };
 
 #define TESSERA_REASON_TOKENS \
   {"none", "host-limit", "encoder-limit", "not-permitted", "no-display-driver", "display-failed", "encoder-failed", \
-   "capture-failed", "invalid-request", "unsupported"}
+   "capture-failed", "invalid-request", "unsupported", "decoder-failed", "no-video"}
 
 /* Control messages, 0x5400-0x54FF (Sunshine's extensions use 0x55xx). */
 #define TESSERA_CTRL_IDR_REQUEST 0x5400  /**< client -> host: tessera_ctrl_stream_t */

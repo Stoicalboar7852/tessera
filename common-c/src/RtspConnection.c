@@ -614,6 +614,11 @@ static bool setupStream(PRTSP_MESSAGE response, char* target, int* error) {
     return ret;
 }
 
+// Tessera: SETUP for the extra video streams, sent from TesseraStreams.c
+bool tesseraRtspSetupStream(PRTSP_MESSAGE response, char* target, int* error) {
+    return setupStream(response, target, error);
+}
+
 // Send RTSP PLAY request
 static bool playStream(PRTSP_MESSAGE response, char* target, int* error) {
     RTSP_MESSAGE request;
@@ -1155,6 +1160,9 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
         EncryptionFeaturesEnabled = 0;
 
+        // Tessera: how many streams the host offers (after NegotiatedVideoFormat is known)
+        tesseraParseDescribe(response.payload);
+
         // Parse the Opus surround parameters out of the RTSP DESCRIBE response.
         ret = parseOpusConfigurations(&response);
         if (ret != 0) {
@@ -1284,6 +1292,12 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         freeMessage(&response);
+    }
+
+    // Tessera: SETUP for each extra video stream
+    ret = tesseraSetupVideoStreams();
+    if (ret != 0) {
+        goto Exit;
     }
 
     if (AppVersionQuad[0] >= 5) {
