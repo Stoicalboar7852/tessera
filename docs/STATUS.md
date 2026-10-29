@@ -5,7 +5,7 @@ _Last updated: 2026-10-29_
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **In progress.** Driver works: the VM test passes, and two dev-PC runs did 5,160 changes with no failure, each within 3 s with the physical monitors on. The stall target (≤ 250 ms) is not met, because of Windows' own per-change cost. Both runs gave every add a never-seen monitor, which is the worst case. A third run with stable monitor IDs is next | See "Phase 1 progress" and `docs/perf.md`. |
+| 1 – VDD | **In progress.** Driver works: the VM test passes, and three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target (≤ 250 ms) is met in steady state but not during changes, because of Windows' own per-change cost. Waiting for a decision on the stall target | See "Phase 1 progress" and `docs/perf.md`. |
 | 2–12 | Not started | |
 
 ## Phase 1 progress
@@ -50,7 +50,7 @@ _Last updated: 2026-10-29_
   `tessera/vdd_client.h` (control client).
 - **Tools:**
   - `vdd-stress` has a `tessera` backend and the `--batch`, `--headless` and `--hdr` options;
-  - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 2 h);
+  - `Run-VddAcceptance.ps1` runs the acceptance matrix on the dev PC (elevated, about 1.5 h);
   - `Run-VddRepro.ps1` and `Get-VddPackages.ps1` cover the third-party reproduction;
   - `tools/vm/Test-VddMonitorsInVm.ps1` checks the driver in the Secure Boot VM.
 - **Second dev-PC acceptance run** (2026-10-29, `docs/perf.md`):
@@ -70,10 +70,17 @@ _Last updated: 2026-10-29_
   - New `vdd-install forget-monitors [--settings]` deletes leftover test monitors and their saved display settings.
   - The acceptance harness cleans up before and after a run, allows 30 minutes for the uninstall, turns QuickEdit off,
     and adds a `newids-8x20` step.
+- **Third dev-PC acceptance run** (2026-10-29, `docs/perf.md`), with stable monitor IDs:
+  - all 5,148 changes succeed; the clean-up removed the 4,336 leftover monitors, and the uninstall took about 1 s;
+  - batched adds of 8 take 0.51 s median (1.87 s in run 2), and their stalls are 30–50 % lower;
+  - one display freezes DWM and Explorer for about 0.2 s per change, a batch of 8 for about 1 s; back-to-back
+    changes queue up and freeze the desktop for seconds;
+  - nothing stalls over 250 ms from 1 s after a change;
+  - headless batches never brought the physical monitors back; one at a time, Windows did after 410 of 800 adds,
+    and 26 adds took over 3 s including switching them off again;
+  - Explorer crashed once (four times in run 2); turning off "taskbar on all displays" brings no consistent benefit.
 - **Open:**
-  - a reboot (to clear the stuck adapter);
-  - the third acceptance run (elevated);
-  - a decision on the stall target;
+  - a decision on the stall target (design risk #1);
   - the Phase 1 summary.
 
 ## Phase 0 acceptance

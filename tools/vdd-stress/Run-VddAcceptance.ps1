@@ -36,8 +36,8 @@
   The notaskbar steps measure how much of Explorer's stall comes from building a taskbar per monitor: they set
   HKCU ...\Explorer\Advanced\MMTaskbarEnabled = 0 and restart Explorer, then put the previous value back (also after
   a crash, from state.json). vdd-stress gives each display slot the same monitor ID every time, as a host gives
-  each client monitor a stable ID; newids-8x20 measures the first-connection case instead. The whole run takes
-  about two and a half hours. Output: <project>\logs\vdd-accept\<timestamp>\.
+  each client monitor a stable ID; newids-8x20 measures the first-connection case instead. The steps take
+  about 70 minutes, plus the clean-up. Output: <project>\logs\vdd-accept\<timestamp>\.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stress\Run-VddAcceptance.ps1"

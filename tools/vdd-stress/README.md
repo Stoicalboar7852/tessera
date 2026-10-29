@@ -65,9 +65,12 @@ powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\vdd-stre
 ```
 
 Needs the driver package built and signed (`tools/signing/Sign-DriverPackage.ps1`) with a certificate trusted by
-`tools/setup/admin-once.ps1`. It takes about two and a half hours, plus the clean-up of earlier test monitors (about
-150 ms per leftover monitor device, before and after). Output goes to `<project>\logs\vdd-accept\<timestamp>\`, with
+`tools/setup/admin-once.ps1`. The steps take about 70 minutes (run 3), plus the clean-up of earlier test monitors
+(about 150 ms per leftover monitor device, before and after). Output goes to `<project>\logs\vdd-accept\<timestamp>\`, with
 `results.md` as the overview. The script header lists the steps. Don't lock the PC while it runs.
+
+`per_burst.py <run folder> [steps...]` gives the worst stall per burst (one batch, or one cycle's one-at-a-time
+changes), as reported in `docs/perf.md` from run 3 on.
 
 ## Reproduction run (third-party drivers)
 
