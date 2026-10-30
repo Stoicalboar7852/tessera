@@ -12,6 +12,10 @@ if(NOT OPENSSL_FOUND)
 endif()
 
 enable_language(C)
+# common-c's CMakeLists uses these without including them (its own top-level project gets them through enet)
+include(CheckFunctionExists)
+include(CheckLibraryExists)
+include(CheckCXXSourceCompiles)
 
 # common-c as a static library, so the client is one executable
 set(BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
