@@ -60,7 +60,10 @@
         "refresh_rate_only": []
       },
       "max_bitrate": 0,
-      "minimum_fps_target": 0
+      "minimum_fps_target": 0,
+      "tessera_max_streams": 4,
+      "tessera_display_source": "virtual",
+      "tessera_make_primary": "enabled"
     }
   },
   {

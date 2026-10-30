@@ -1544,6 +1544,80 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### tessera_max_streams
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Tessera: the most video streams one session may have, one per client monitor (stream 0 included).
+            1 turns multi-display streaming off. The host also stays within the encoder sessions its GPU allows.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            4
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            tessera_max_streams = 2
+            @endcode</td>
+    </tr>
+</table>
+
+### tessera_display_source
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Tessera: what a multi-display session streams.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            virtual
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>virtual</td>
+        <td>One virtual display per client monitor (needs the Tessera virtual display driver).</td>
+    </tr>
+    <tr>
+        <td>physical</td>
+        <td>The host's active displays: the primary first, then left to right.</td>
+    </tr>
+</table>
+
+### tessera_make_primary
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Tessera: make the virtual display of the client's primary monitor the Windows primary display for the
+            session, so apps open where the client looks. The previous layout comes back afterwards.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            tessera_make_primary = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Network
 
 ### upnp
