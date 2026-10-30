@@ -863,6 +863,8 @@ namespace config {
   /**
    * @brief Default input configuration values used before file and CLI overrides.
    */
+  tessera_t tessera {};  ///< [fork] Tessera: multistream settings.
+
   input_t input {
     {
       {0x10, 0xA0},
@@ -1625,6 +1627,11 @@ namespace config {
    */
   void apply_config(config_map_t &&vars) {
     log_config_settings(vars, true);
+
+    // [fork] Tessera: multistream
+    int_between_f(vars, "tessera_max_streams", tessera.max_streams, {1, 4});
+    string_restricted_f(vars, "tessera_display_source", tessera.display_source, {"virtual"sv, "physical"sv});
+    bool_f(vars, "tessera_make_primary", tessera.make_primary);
 
     int_f(vars, "qp", video.qp);
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});

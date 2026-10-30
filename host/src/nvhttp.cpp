@@ -1387,6 +1387,7 @@ namespace nvhttp {
 
       if (revert_display_configuration) {
         display_device::revert_configuration();
+        tessera::host::revert_displays();  // [fork] Tessera
       }
     });
 
@@ -1621,6 +1622,7 @@ namespace nvhttp {
 
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
     display_device::revert_configuration();
+    tessera::host::revert_displays();  // [fork] Tessera
   }
 
   /**

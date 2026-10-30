@@ -63,6 +63,9 @@
 #include "utility.h"
 #include "uuid.h"
 
+// [fork] Tessera: per-client extension permissions
+#include "src/tessera/client_permissions.h"
+
 using namespace std::literals;
 
 namespace confighttp {
@@ -1325,7 +1328,8 @@ namespace confighttp {
 
     print_req(request);
 
-    const nlohmann::json named_certs = nvhttp::get_all_clients();
+    nlohmann::json named_certs = nvhttp::get_all_clients();
+    tessera::host::permissions::annotate(named_certs);  // [fork] Tessera: per-client extension permissions
 
     nlohmann::json output_tree;
     output_tree["named_certs"] = named_certs;
@@ -1384,6 +1388,45 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (nlohmann::json::exception &e) {
       BOOST_LOG(warning) << "Update Client: "sv << e.what();
+      bad_request(response, e.what());
+    }
+  }
+
+  /**
+   * @brief [fork] Tessera: allow or refuse multi-display streaming for a paired client.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the POST request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "uuid": "<uuid>",
+   *   "multistream": true
+   * }
+   * @endcode
+   */
+  void updateTesseraClient(resp_https_t response, req_https_t request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
+      nlohmann::json output_tree;
+      output_tree["status"] = tessera::host::permissions::set_multistream(input_tree.value("uuid", ""), input_tree.value("multistream", true));
+      send_response(response, output_tree);
+    } catch (nlohmann::json::exception &e) {
+      BOOST_LOG(warning) << "Update Tessera client: "sv << e.what();
       bad_request(response, e.what());
     }
   }
@@ -2492,6 +2535,7 @@ namespace confighttp {
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
+    server.resource["^/api/tessera/clients/update$"]["POST"] = updateTesseraClient;  // [fork] Tessera
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;

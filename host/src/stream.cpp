@@ -2442,6 +2442,7 @@ namespace stream {
 
         if (revert_display_config) {
           display_device::revert_configuration();
+          tessera::host::revert_displays();  // [fork] Tessera
         }
 
         platf::streaming_will_stop();

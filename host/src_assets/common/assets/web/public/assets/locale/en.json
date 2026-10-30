@@ -682,6 +682,8 @@
     "restart_sunshine": "Restart Sunshine",
     "restart_sunshine_desc": "If Sunshine isn't working properly, you can try restarting it. This will terminate any running sessions.",
     "restart_sunshine_success": "Sunshine is restarting",
+    "tessera_multistream": "Multi-display",
+    "tessera_multistream_desc": "Allow this device to stream several displays at once",
     "troubleshooting": "Troubleshooting",
     "unpair_all": "Unpair All",
     "unpair_all_error": "Error while unpairing",

@@ -38,6 +38,8 @@ extern "C" {
 #include "sync.h"
 #include "video.h"
 
+#include "tessera/protocol.h"  // [fork] Tessera
+
 #ifdef _WIN32
 extern "C" {
   #include <libavutil/hwcontext_d3d11va.h>
@@ -3032,6 +3034,45 @@ namespace video {
     return chosen_encoder && (chosen_encoder->flags & PARALLEL_ENCODING);
   }
 
+  namespace {
+    std::atomic_int tessera_encoder_session_count {TESSERA_MAX_STREAMS};  ///< [fork] Tessera: from the last probe
+  }
+
+  int tessera_encoder_sessions() {
+    return tessera_encoder_session_count.load();
+  }
+
+  /**
+   * @brief [fork] Tessera: how many 1080p encoder sessions the GPU opens at once (up to TESSERA_MAX_STREAMS).
+   * @details No vendor reports its concurrent-session limit (§4.5), so the probe opens sessions until one fails.
+   */
+  void tessera_probe_encoder_sessions(const encoder_t &encoder) {
+    if (!(encoder.flags & PARALLEL_ENCODING)) {
+      tessera_encoder_session_count = 1;
+      return;
+    }
+    config_t config {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 0, 0};
+    std::shared_ptr<platf::display_t> disp;
+    reset_display(disp, encoder.platform_formats->dev_type, display_device::map_output_name(config::video.output_name), config);
+    if (!disp) {
+      return;  // keep the previous result
+    }
+    std::vector<std::unique_ptr<encode_session_t>> sessions;
+    while (sessions.size() < TESSERA_MAX_STREAMS) {
+      auto device = make_encode_device(*disp, encoder, config);
+      if (!device) {
+        break;
+      }
+      auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(device));
+      if (!session) {
+        break;
+      }
+      sessions.push_back(std::move(session));
+    }
+    tessera_encoder_session_count = static_cast<int>(std::max<std::size_t>(sessions.size(), 1));
+    BOOST_LOG(info) << "Multistream: "sv << tessera_encoder_session_count.load() << " concurrent encoder sessions available (of "sv << TESSERA_MAX_STREAMS << " tried)"sv;
+  }
+
   /**
    * @brief Enumerates supported validate flag options.
    */
@@ -3498,6 +3539,7 @@ namespace video {
     auto &encoder = *chosen_encoder;
 
     record_encoder_probe_results(encoder);
+    tessera_probe_encoder_sessions(encoder);  // [fork] Tessera
 
     BOOST_LOG(debug) << "------  h264 ------"sv;
     for (int x = 0; x < encoder_t::MAX_FLAGS; ++x) {

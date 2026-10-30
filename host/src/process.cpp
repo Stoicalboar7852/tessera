@@ -36,6 +36,9 @@
 #include "system_tray.h"
 #include "utility.h"
 
+// [fork] Tessera: multistream virtual displays
+#include "src/tessera/multistream_host.h"
+
 #ifdef _WIN32
   // from_utf8() string conversion function
   #include "platform/windows/utf_utils.h"
@@ -389,6 +392,7 @@ namespace proc {
 #endif
 
       display_device::revert_configuration();
+      tessera::host::revert_displays();  // [fork] Tessera: the app's virtual displays
     }
 
     _app_id = -1;

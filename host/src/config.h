@@ -407,12 +407,22 @@ namespace config {
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
   };
 
+  /**
+   * @brief [fork] Tessera: multistream settings (docs/phase-2-design.md).
+   */
+  struct tessera_t {
+    int max_streams = 4;  ///< Streams per session, stream 0 included (1 turns multistream off).
+    std::string display_source = "virtual";  ///< "virtual": one virtual display per client monitor; "physical": the active displays.
+    bool make_primary = true;  ///< Make the client's primary monitor the Windows primary for the session.
+  };
+
   extern video_t video;
   extern audio_t audio;
   extern stream_t stream;
   extern nvhttp_t nvhttp;
   extern input_t input;
   extern sunshine_t sunshine;
+  extern tessera_t tessera;  ///< [fork] Tessera
 
 #ifdef SUNSHINE_TESTS
   /**

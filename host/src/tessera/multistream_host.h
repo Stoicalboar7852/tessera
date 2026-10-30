@@ -56,6 +56,9 @@ namespace tessera::host {
    */
   void plan_launch(rtsp_stream::launch_session_t &launch_session, std::string_view version, std::string_view displays);
 
+  /// Removes the app's virtual displays and restores the host's topology (where Sunshine reverts its display setup).
+  void revert_displays();
+
   /// Adds TesseraStreams / TesseraReason to the launch or resume reply, if the request had a display list.
   void add_launch_reply(const rtsp_stream::launch_session_t &launch_session, boost::property_tree::ptree &tree);
 

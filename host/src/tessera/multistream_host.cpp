@@ -7,9 +7,13 @@
 #include <array>
 #include <charconv>
 #include <format>
+#include <mutex>
 #include <tuple>
+#include <variant>
 
 // local includes
+#include "client_permissions.h"
+#include "display_session.h"
 #include "multistream_host.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -18,6 +22,7 @@
 #include "src/video.h"
 #include "tessera/crypto.h"
 #include "tessera/display_topology.h"
+#include "tessera/vdd_client.h"
 
 using namespace std::literals;
 
@@ -35,13 +40,59 @@ namespace tessera::host {
 
     /// Streams the host can run now, stream 0 included.
     std::uint32_t host_max_streams() {
-      return video::tessera_supports_multistream() ? TESSERA_MAX_STREAMS : 1;
+      if (!video::tessera_supports_multistream()) {
+        return 1;
+      }
+      return static_cast<std::uint32_t>(std::clamp(config::tessera.max_streams, 1, TESSERA_MAX_STREAMS));
+    }
+
+    /// The virtual displays of the running app (one session at a time until Phase 5).
+    std::mutex display_session_mutex;
+    std::shared_ptr<display_session_t> active_display_session;
+
+    bool same_displays(const std::vector<multistream::client_display_t> &a, const std::vector<multistream::client_display_t> &b) {
+      return std::ranges::equal(a, b, [](const multistream::client_display_t &x, const multistream::client_display_t &y) {
+        return x.key == y.key && x.width == y.width && x.height == y.height && modes::same_refresh(x.refresh, y.refresh) &&
+               x.hdr == y.hdr && x.dpi == y.dpi && x.x == y.x && x.y == y.y;
+      });
     }
 
     /**
-     * @brief The active displays to stream, the primary first and the rest left to right.
-     * @details Phase 2 step 3 streams existing displays; virtual displays per client monitor come with the display
-     *          session.
+     * @brief One virtual display per client monitor (reused when the same client resumes with the same monitors).
+     * @return The display names in stream order, or the reason there are none.
+     */
+    std::variant<std::vector<std::string>, tessera_reason_e> virtual_displays(const rtsp_stream::launch_session_t &launch_session, const std::vector<multistream::client_display_t> &clients) {
+      std::lock_guard lock {display_session_mutex};
+      if (active_display_session && same_displays(active_display_session->clients(), clients)) {
+        BOOST_LOG(info) << "Multistream: reusing the virtual displays"sv;
+        return active_display_session->displays();
+      }
+      if (active_display_session) {
+        active_display_session->revert();
+        active_display_session.reset();
+      }
+
+      if (auto probe = vdd::vdd_client_t::open(); !probe) {
+        BOOST_LOG(warning) << "Multistream: no virtual display driver: "sv << probe.error().to_string();
+        return TESSERA_REASON_NO_DISPLAY_DRIVER;
+      }
+      display_session_t::options_t options;
+      options.client_name = launch_session.client_name;
+      options.client_cert = launch_session.client_cert;
+      options.make_primary = config::tessera.make_primary;
+      options.adapter_name = config::video.adapter_name;
+      auto session = display_session_t::create(clients, options);
+      if (!session) {
+        BOOST_LOG(error) << "Multistream: creating the virtual displays failed: "sv << session.error().to_string();
+        return TESSERA_REASON_DISPLAY_FAILED;
+      }
+      active_display_session = std::move(session).value();
+      return active_display_session->displays();
+    }
+
+    /**
+     * @brief The active displays to stream (tessera_display_source = physical), the primary first and the rest left to
+     *        right.
      */
     std::vector<std::string> active_displays() {
       const auto topology = display::capture();
@@ -87,7 +138,7 @@ namespace tessera::host {
 
   void add_serverinfo(boost::property_tree::ptree &tree) {
     tree.put("root."s + TESSERA_SERVERINFO_MULTISTREAM, TESSERA_MULTISTREAM_VERSION);
-    tree.put("root."s + TESSERA_SERVERINFO_MAX_STREAMS, host_max_streams());
+    tree.put("root."s + TESSERA_SERVERINFO_MAX_STREAMS, std::min<std::uint32_t>(host_max_streams(), static_cast<std::uint32_t>(video::tessera_encoder_sessions())));
   }
 
   void plan_launch(rtsp_stream::launch_session_t &launch_session, std::string_view version, std::string_view displays) {
@@ -127,16 +178,34 @@ namespace tessera::host {
 
     multistream::limits_t limits;
     limits.host_max = host_max_streams();
+    limits.encoder_max = static_cast<std::uint32_t>(video::tessera_encoder_sessions());
+    limits.permitted = permissions::multistream_allowed(launch_session.client_cert);
     auto decision = multistream::plan_streams(requested->size(), limits);
 
-    auto host_displays = active_displays();
-    if (host_displays.size() < decision.streams) {
-      decision.streams = static_cast<std::uint32_t>(std::max<std::size_t>(host_displays.size(), 1));
-      decision.reason = TESSERA_REASON_HOST_LIMIT;
-    }
     if (decision.streams < 2) {
       single(decision.reason);
       return;
+    }
+
+    std::vector<std::string> host_displays;
+    if (config::tessera.display_source == "physical") {
+      host_displays = active_displays();
+      if (host_displays.size() < decision.streams) {
+        decision.streams = static_cast<std::uint32_t>(std::max<std::size_t>(host_displays.size(), 1));
+        decision.reason = TESSERA_REASON_HOST_LIMIT;
+      }
+      if (decision.streams < 2) {
+        single(decision.reason);
+        return;
+      }
+    } else {
+      const std::vector<multistream::client_display_t> clients(requested->begin(), requested->begin() + decision.streams);
+      auto displays_or_reason = virtual_displays(launch_session, clients);
+      if (const auto *reason = std::get_if<tessera_reason_e>(&displays_or_reason)) {
+        single(*reason);
+        return;
+      }
+      host_displays = std::get<std::vector<std::string>>(std::move(displays_or_reason));
     }
 
     for (std::uint32_t i = 0; i < decision.streams; ++i) {
@@ -158,6 +227,14 @@ namespace tessera::host {
     for (std::size_t i = 0; i < plan->streams.size(); ++i) {
       const auto &s = plan->streams[i];
       BOOST_LOG(info) << "Multistream: stream "sv << i << ": "sv << s.client.width << 'x' << s.client.height << " on "sv << s.display;
+    }
+  }
+
+  void revert_displays() {
+    std::lock_guard lock {display_session_mutex};
+    if (active_display_session) {
+      active_display_session->revert();
+      active_display_session.reset();
     }
   }
 

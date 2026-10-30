@@ -758,6 +758,11 @@ namespace video {
    */
   bool tessera_supports_multistream();
 
+  /**
+   * @brief [fork] Tessera: concurrent encoder sessions found by the last encoder probe (at least 1).
+   */
+  int tessera_encoder_sessions();
+
   // Several NTSC standard refresh rates are hardcoded here, because their
   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could
   // reduce 29.97 to 2997/100 but this would be slightly wrong. We also include

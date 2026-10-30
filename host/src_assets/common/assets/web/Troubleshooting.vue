@@ -455,6 +455,15 @@
           <div class="flex-grow-1">
             {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
           </div>
+          <!-- [fork] Tessera: per-client permission for multi-display streaming -->
+          <div class="form-check form-switch ms-2 mb-0" :title="$t('troubleshooting.tessera_multistream_desc')">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   :id="'multistream-' + client.uuid"
+                   :checked="client.tessera_multistream !== false"
+                   :aria-checked="(client.tessera_multistream !== false).toString()"
+                   @change="toggleMultistream(client.uuid, client.tessera_multistream === false)">
+            <label class="form-check-label small" :for="'multistream-' + client.uuid">{{ $t('troubleshooting.tessera_multistream') }}</label>
+          </div>
           <div class="form-check form-switch ms-2 mb-0">
             <input class="form-check-input" type="checkbox" role="switch"
                    :id="'toggle-' + client.uuid"
@@ -923,6 +932,18 @@
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({ uuid, enabled })
+          }).then(() => {
+            this.refreshClients();
+          });
+        },
+        // [fork] Tessera
+        toggleMultistream(uuid, multistream) {
+          fetch("./api/tessera/clients/update", {
+            method: "POST",
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ uuid, multistream })
           }).then(() => {
             this.refreshClients();
           });
