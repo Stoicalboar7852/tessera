@@ -11,6 +11,8 @@ on:
     paths:
       - 'host/**'
       - 'host-helpers/common/**'
+      - 'protocol/**'
+      - 'drivers/vdd/include/**'
       - 'cmake/**'
       - '.gitmodules'
       - '.github/workflows/ci-host-windows.yml'
@@ -18,6 +20,8 @@ on:
     paths:
       - 'host/**'
       - 'host-helpers/common/**'
+      - 'protocol/**'
+      - 'drivers/vdd/include/**'
       - 'cmake/**'
       - '.gitmodules'
       - '.github/workflows/ci-host-windows.yml'
@@ -140,7 +144,9 @@ jobs:
           name: host-windows-amd64
           retention-days: 7
           if-no-files-found: ignore
+          # assets: shaders and the web UI, which sunshine.exe needs next to it (Phase 2 test harness)
           path: |
             host/build/sunshine.exe
             host/build/tools/*.exe
+            host/build/assets/**
             host/build/tests/test_results.xml
