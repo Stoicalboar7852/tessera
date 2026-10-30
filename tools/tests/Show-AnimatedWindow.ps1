@@ -15,6 +15,9 @@ param(
 )
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+# Coordinates are pixels, as the harness reads them
+Add-Type -Namespace Tessera -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();'
+[void][Tessera.Dpi]::SetProcessDPIAware()
 
 $form = New-Object System.Windows.Forms.Form
 $form.FormBorderStyle = 'None'

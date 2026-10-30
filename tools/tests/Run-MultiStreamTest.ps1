@@ -180,9 +180,42 @@ function Complete-Pairing([string]$exe, [string[]]$arguments, [string]$name, [st
 
 # --- Displays and animation --------------------------------------------------------------------------------------
 
-Add-Type -AssemblyName System.Windows.Forms
+# Asked fresh every time (Windows Forms' Screen list is cached and only refreshes with a message loop).
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+namespace Tessera {
+  public static class Monitors {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice; }
+    delegate bool EnumProc(IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, EnumProc proc, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFOEX info);
+    public static string[] List() {
+      var list = new List<string>();
+      EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate (IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data) {
+        var info = new MONITORINFOEX();
+        info.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+        if (GetMonitorInfo(monitor, ref info)) {
+          var r = info.rcMonitor;
+          list.Add(string.Format("{0}|{1}|{2}|{3}|{4}|{5}", info.szDevice, r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top, (info.dwFlags & 1) != 0));
+        }
+        return true;
+      }, IntPtr.Zero);
+      return list.ToArray();
+    }
+  }
+}
+'@
 
-function Get-Screens { [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { @{ name = $_.DeviceName; x = $_.Bounds.X; y = $_.Bounds.Y; w = $_.Bounds.Width; h = $_.Bounds.Height; primary = $_.Primary } } }
+function Get-Screens {
+    [Tessera.Monitors]::List() | ForEach-Object {
+        $f = $_ -split '\|'
+        @{ name = $f[0]; x = [int]$f[1]; y = [int]$f[2]; w = [int]$f[3]; h = [int]$f[4]; primary = ($f[5] -eq 'True') }
+    }
+}
 
 function Wait-NewScreens([string[]]$before, [int]$count, [int]$timeoutSeconds = 30) {
     for ($i = 0; $i -lt $timeoutSeconds * 4; $i++) {
