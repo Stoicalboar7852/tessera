@@ -410,7 +410,9 @@ namespace rtsp_stream {
 
     tcp::socket sock;  ///< TCP socket connected to the RTSP client.
 
-    std::array<char, 2048> msg_buf;  ///< Receive buffer for one RTSP request header and payload.
+    // [fork] Tessera: 8 KiB (upstream 2 KiB), for the per-stream attributes of a multistream ANNOUNCE
+    // (about 450 bytes per extra stream, protocol/multistream.md section 3).
+    std::array<char, 8192> msg_buf;  ///< Receive buffer for one RTSP request header and payload.
 
     char *crlf;  ///< Pointer to the next CRLF delimiter while parsing the receive buffer.
     char *begin = msg_buf.data();  ///< Start of the unparsed data currently in `msg_buf`.

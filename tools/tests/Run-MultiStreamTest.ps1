@@ -217,10 +217,12 @@ function Get-Screens {
     }
 }
 
-function Wait-NewScreens([string[]]$before, [int]$count, [int]$timeoutSeconds = 30) {
+# Callers wrap the result in @(): PowerShell returns an empty list as $null.
+function Wait-NewScreens([string[]]$before, [int]$count, [int]$timeoutSeconds = 30, $client) {
     for ($i = 0; $i -lt $timeoutSeconds * 4; $i++) {
         $new = @(Get-Screens | Where-Object { $before -notcontains $_.name } | Sort-Object { $_.x })
         if ($new.Count -ge $count) { return $new }
+        if ($client -and $client.HasExited) { break }
         Start-Sleep -Milliseconds 250
     }
     return @(Get-Screens | Where-Object { $before -notcontains $_.name } | Sort-Object { $_.x })
@@ -228,8 +230,9 @@ function Wait-NewScreens([string[]]$before, [int]$count, [int]$timeoutSeconds = 
 
 function Start-Animations($screens, [string]$mode) {
     $procs = @()
-    for ($i = 0; $i -lt @($screens).Count; $i++) {
-        $s = @($screens)[$i]
+    $screens = @($screens | Where-Object { $_ })
+    for ($i = 0; $i -lt $screens.Count; $i++) {
+        $s = $screens[$i]
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote (Join-Path $Stage 'Show-AnimatedWindow.ps1')),
             '-X', $s.x, '-Y', $s.y, '-Width', $s.w, '-Height', $s.h, '-Label', (Quote "Stream $i  $($s.name)"))
         if ($mode -eq 'typical' -and $i -gt 0) { $arguments += '-Static' }
@@ -256,7 +259,7 @@ function Invoke-ClientCase([string]$case, [string]$displays, [int]$seconds, [str
     if ($extra -contains '--legacy' -or $count -eq 1) {
         $streamScreens = @(Get-Screens | Where-Object { $_.primary })
     } else {
-        $streamScreens = Wait-NewScreens $before $count
+        $streamScreens = @(Wait-NewScreens $before $count 30 $client)
     }
     $streamScreens | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 (Join-Path $dir 'screens.json')
     $anim = @()
@@ -274,7 +277,12 @@ function Invoke-ClientCase([string]$case, [string]$displays, [int]$seconds, [str
     if (Test-Path (Join-Path $dir 'report.json')) { $report = Get-Content -Raw (Join-Path $dir 'report.json') | ConvertFrom-Json }
     $script:Results[$case] = @{ report = $report; screens = $streamScreens; exit = $client.ExitCode; expected = $count }
     $streams = if ($report) { $report.streams } else { 'n/a' }
-    Log "  $case : client exit $($client.ExitCode), streams $streams"
+    Log "  $case : client exit $($client.ExitCode), streams $streams$(if ($report -and $report.error) { ', error: ' + $report.error })"
+    if (-not $report -or $report.error) {
+        # A launch whose RTSP handshake failed stays pending on the host until its ping timeout, and the host gives
+        # the next client that pending launch: wait it out so one failure doesn't fail the following cases.
+        Start-Sleep -Seconds 15
+    }
 }
 
 function Test-Topology([string]$label) {
@@ -376,7 +384,7 @@ try {
         $dir = Join-Path $OutDir 'cases\kill'
         New-Item -ItemType Directory -Force $dir | Out-Null
         $client = Start-Process -FilePath (Join-Path $Stage 'mstream-client.exe') -ArgumentList @('stream', '--host', '127.0.0.1', '--identity', (Quote (Join-Path $OutDir 'identity-tessera')), '--displays', '1920x1080@60,1920x1080@60', '--seconds', '60', '--out', (Quote $dir)) -PassThru -WindowStyle Hidden
-        $new = Wait-NewScreens $before 2
+        $new = @(Wait-NewScreens $before 2 30 $client)
         Start-Sleep -Seconds 10
         Stop-Process -Id $tessera.process.Id -Force
         Start-Sleep -Seconds 8
