@@ -1,13 +1,31 @@
-# Project status: Tessera
+﻿# Project status: Tessera
 
-_Last updated: 2026-10-30_
+_Last updated: 2026-10-31_
 
 | Phase | State | Notes |
 |---|---|---|
-| 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
-| 1 – VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
-| 2 – Protocol and host multi-stream | **Design proposed, waiting for approval** (`docs/phase-2-design.md`, ADR 0007 proposed) | Phase 1 confirmed 2026-10-30. |
-| 3–12 | Not started | |
+| 0 â€“ Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
+| 1 â€“ VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state â‰¤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
+| 2 â€“ Protocol and host multi-stream | **In progress.** Design approved 2026-10-30 (ADR 0007 accepted). Protocol, common-c, host (virtual displays, encoder probe, permissions), test client and harness are implemented; CI builds them. The acceptance run (elevated) is next. | See "Phase 2 progress". |
+| 3â€“12 | Not started | |
+
+## Phase 2 progress
+- **Design** approved 2026-10-30 (`docs/phase-2-design.md`): stock clients unchanged, the client's primary becomes
+  Windows' primary, common-c's video path compiled once per extra stream. Open: a second PC for a LAN latency run.
+- **Protocol** (`protocol/multistream.md`, `protocol/include/tessera/protocol.h`, ADR 0007): display list in
+  `/launch`, per-stream RTSP SETUP/ANNOUNCE, extra streams on the existing video port with their own ping payloads,
+  every stream encrypted with a per-stream IV space, `0x54xx` control messages, per-stream mouse input.
+- **common-c**: up to 4 streams. Each extra stream is a copy of the unchanged upstream video path (wrappers +
+  `TesseraVideoInstance.h`); a ctest checks the copies share nothing with stream 0 by accident. About 80 marked
+  lines in upstream files. Tests pass on Linux, macOS and Windows.
+- **Host**: per-display capture threads, per-stream video state, RTSP/nvhttp/input hooks
+  (`host/src/tessera/multistream_host`); virtual displays per client monitor in one request with the client's
+  layout and primary, journaled (`display_session`); concurrent encoder-session probe; config
+  (`tessera_max_streams`, `tessera_display_source`, `tessera_make_primary`); per-client "Multi-display" permission
+  in the web UI. The driver needed no change.
+- **Test tools**: `tools/mstream-client` (pairs, launches with a display list, per-stream statistics and raw video);
+  `tools/tests/Run-MultiStreamTest.ps1` (elevated acceptance run) and `Prepare-MultiStreamTest.ps1`.
+- **Next**: the acceptance run on the dev PC, `docs/perf.md` latency rows, the Phase 2 summary.
 
 ## Phase 1 progress
 - **Freeze analysis** (`docs/vdd-freeze-analysis.md`): source and issue-tracker review, plus measurements on the
@@ -20,7 +38,7 @@ _Last updated: 2026-10-30_
   26300, no GPU):
   - installs dev-signed with Secure Boot on;
   - adds and removes 1, 2 and 4 monitors one at a time and batched, every operation successful; changes are
-    visible in 26–237 ms;
+    visible in 26â€“237 ms;
   - after a holder process is killed, its 2 monitors are removed in 2.07 s (the 2 s grace period);
   - no WUDFHost crash or UMDF host failure.
 
@@ -32,7 +50,7 @@ _Last updated: 2026-10-30_
   - all 1,600 one-at-a-time changes with 8 displays succeed in under 3 s (worst add 2.33 s);
   - batched adds of 8 take at most 3.15 s;
   - stalls are far above 250 ms: Explorer stays unresponsive while changes queue up, and is better but still
-    0.3–2 s per burst when batched;
+    0.3â€“2 s per burst when batched;
   - the headless steps were invalid (harness bug, fixed);
   - the final uninstall hung, leaving the device stuck "being removed" until a reboot. Probable fix: release each
     GPU's D3D device with the last swap chain.
@@ -73,7 +91,7 @@ _Last updated: 2026-10-30_
     and adds a `newids-8x20` step.
 - **Third dev-PC acceptance run** (2026-10-29, `docs/perf.md`), with stable monitor IDs:
   - all 5,148 changes succeed; the clean-up removed the 4,336 leftover monitors, and the uninstall took about 1 s;
-  - batched adds of 8 take 0.51 s median (1.87 s in run 2), and their stalls are 30–50 % lower;
+  - batched adds of 8 take 0.51 s median (1.87 s in run 2), and their stalls are 30â€“50 % lower;
   - one display freezes DWM and Explorer for about 0.2 s per change, a batch of 8 for about 1 s; back-to-back
     changes queue up and freeze the desktop for seconds;
   - nothing stalls over 250 ms from 1 s after a change;
@@ -90,8 +108,8 @@ _Last updated: 2026-10-30_
 
 | Criterion | Result |
 |---|---|
-| Everything builds unchanged in CI | ✅ host (Windows, MSYS2 UCRT64, incl. upstream tests), common-c (Linux/macOS/Windows), Qt client (Windows x64, macOS), Android, iOS (unsigned; deployment target raised to 12.0 on the command line for Xcode 26). Plus Tessera's own native components (MSVC and MinGW, 31/31 tests) and the VDD. |
-| `recover.exe` restores a deliberately changed display topology | ✅ `tools/tests/topology-roundtrip.ps1` on the dev PC, 4/4 scenarios restored exactly in < 1 s each: move a display, swap the primary, change refresh rate (60 → 50 Hz), turn a display off. |
+| Everything builds unchanged in CI | âœ… host (Windows, MSYS2 UCRT64, incl. upstream tests), common-c (Linux/macOS/Windows), Qt client (Windows x64, macOS), Android, iOS (unsigned; deployment target raised to 12.0 on the command line for Xcode 26). Plus Tessera's own native components (MSVC and MinGW, 31/31 tests) and the VDD. |
+| `recover.exe` restores a deliberately changed display topology | âœ… `tools/tests/topology-roundtrip.ps1` on the dev PC, 4/4 scenarios restored exactly in < 1 s each: move a display, swap the primary, change refresh rate (60 â†’ 50 Hz), turn a display off. |
 
 ## Phase 0 deliverables
 - ADRs 0001 (base fork), 0002 (monorepo), 0003 (own CCD layer), 0004 (dev environment).
