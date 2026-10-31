@@ -26,6 +26,8 @@
     ms2-hibr/ms4-hibr  short: as ms2/ms4 with the total raised to 20 Mbps per display
     ms4-120       short, diagnostic: 4 x 1080p120 (the content draws about 64 fps), to see whether the extra
                   streams' frame rate is capped below the content's at 120 Hz as at 60 Hz
+    ms4-video     short, diagnostic: 4 x 1080p60 with video-like content (ffplay, Direct3D, 60 fps) instead of
+                  the GDI test windows
     limit         host limited to 2 streams, 4 requested: expect 2 and "host-limit"
     kill          host killed during a 2-stream session: displays must go, recover.exe must restore the topology
     stock-moonlight  short: stock Moonlight streams Desktop from the Tessera host
@@ -46,7 +48,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $ProjectRoot) { $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot ('logs\mstream\' + (Get-Date -Format 'yyyyMMdd-HHmm')) }
 $Stage = Join-Path $env:ProgramData 'Tessera\mstream-test'
-$AllCases = 'legacy', 'ms2-typical', 'ms2', 'ms3', 'ms4', 'mixed', 'ms4-typical', 'ms2-hibr', 'ms4-hibr', 'ms4-120', 'limit', 'kill', 'stock-moonlight', 'stock-sunshine'
+$AllCases = 'legacy', 'ms2-typical', 'ms2', 'ms3', 'ms4', 'mixed', 'ms4-typical', 'ms2-hibr', 'ms4-hibr', 'ms4-120', 'ms4-video', 'limit', 'kill', 'stock-moonlight', 'stock-sunshine'
 $Short = [Math]::Min(120, $Seconds)
 if (-not $Cases) { $Cases = $AllCases }
 $WebUser = 'tessera-test'
@@ -73,8 +75,8 @@ function Set-Unattended {
     }
 }
 
-function Invoke-Tool([string]$exe, [string[]]$arguments, [string]$log, [int]$timeoutMinutes = 10) {
-    $p = Start-Process -FilePath $exe -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+function Invoke-Tool([string]$exe, [string[]]$arguments, [string]$log, [int]$timeoutMinutes = 10, [string]$workDir = (Get-Location).Path) {
+    $p = Start-Process -FilePath $exe -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WorkingDirectory $workDir
     $null = $p.Handle  # Windows PowerShell 5.1 loses the exit code without this
     if (-not $p.WaitForExit($timeoutMinutes * 60 * 1000)) { $p.Kill(); return -999 }
     return $p.ExitCode
@@ -169,8 +171,8 @@ function Invoke-WebApi([string]$method, [string]$path, [string]$json) {
 }
 
 # Starts a pairing client and enters the PIN on the host once the request shows up.
-function Complete-Pairing([string]$exe, [string[]]$arguments, [string]$name, [string]$log) {
-    $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+function Complete-Pairing([string]$exe, [string[]]$arguments, [string]$name, [string]$log, [string]$workDir = (Get-Location).Path) {
+    $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WorkingDirectory $workDir
     $null = $p.Handle
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Seconds 1
@@ -245,6 +247,14 @@ function Start-Animations($screens, [string]$mode, [string]$dir) {
     $screens = @($screens | Where-Object { $_ })
     for ($i = 0; $i -lt $screens.Count; $i++) {
         $s = $screens[$i]
+        if ($mode -eq 'video') {
+            # Video-like content: ffplay renders a 60 fps test pattern through Direct3D, scaled to the display
+            $vf = "testsrc2=size=960x540:rate=60,drawtext=text='Stream $i  $($s.name -replace '\\', '/')':fontfile='C\:/Windows/Fonts/segoeuib.ttf':fontsize=36:fontcolor=white:x=20:y=20"
+            $arguments = @('-hide_banner', '-loglevel', 'error', '-stats', '-f', 'lavfi', '-i', (Quote $vf), '-noborder', '-alwaysontop',
+                '-left', $s.x, '-top', $s.y, '-x', $s.w, '-y', $s.h, '-an', '-window_title', (Quote "Stream $i"))
+            $procs += Start-Process (Join-Path $Stage 'ffmpeg\ffplay.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $dir "anim$i.err")
+            continue
+        }
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote (Join-Path $Stage 'Show-AnimatedWindow.ps1')),
             '-X', $s.x, '-Y', $s.y, '-Width', $s.w, '-Height', $s.h, '-Label', (Quote "Stream $i  $($s.name)"),
             '-LogFile', (Quote (Join-Path $dir "anim$i.log")))
@@ -291,6 +301,12 @@ function Invoke-ClientCase([string]$case, [string]$displays, [int]$seconds, [str
     # The animated windows' own paint rate (median of whole seconds), to tell the content's frame rate from the stream's
     $content = @()
     for ($i = 0; $i -lt @($streamScreens).Count; $i++) {
+        if ($animate -eq 'video') {
+            # ffplay's last status line: "<seconds> M-V: <drift> fd= <frames dropped> ..."
+            $m = [regex]::Matches([string](Get-Content -Raw (Join-Path $dir "anim$i.err") -ErrorAction SilentlyContinue), '([\d.]+)\s+M-V:\s*[-\d.]+\s+fd=\s*(\d+)')
+            $content += $(if ($m.Count) { $last = $m[$m.Count - 1]; [int][Math]::Round(60 - [int]$last.Groups[2].Value / [Math]::Max(1.0, [double]::Parse($last.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture))) } else { $null })
+            continue
+        }
         $rates = @(Get-Content (Join-Path $dir "anim$i.log") -ErrorAction SilentlyContinue | Select-Object -Skip 2 | ForEach-Object { [int]$_ } | Sort-Object)
         $content += $(if ($rates.Count) { $rates[[int]($rates.Count / 2)] } else { $null })
     }
@@ -418,6 +434,7 @@ try {
     if ($Cases -contains 'ms2-hibr') { Log 'case ms2-hibr'; Invoke-ClientCase 'ms2-hibr' $d2 $Short 'worst' @('--bitrate', '40000') }
     if ($Cases -contains 'ms4-hibr') { Log 'case ms4-hibr'; Invoke-ClientCase 'ms4-hibr' $d4 $Short 'worst' @('--bitrate', '80000') }
     if ($Cases -contains 'ms4-120') { Log 'case ms4-120'; Invoke-ClientCase 'ms4-120' '1920x1080@120,1920x1080@120,1920x1080@120,1920x1080@120' $Short 'worst' }
+    if ($Cases -contains 'ms4-video') { Log 'case ms4-video'; Invoke-ClientCase 'ms4-video' $d4 $Short 'video' }
     Test-Topology 'after-multistream' | Out-Null
 
     if ($Cases -contains 'limit') {
@@ -451,13 +468,16 @@ try {
         Log 'case stock-moonlight'
         $dir = Join-Path $OutDir 'cases\stock-moonlight'
         New-Item -ItemType Directory -Force $dir | Out-Null
-        $moonlight = Join-Path $Stage 'moonlight\Moonlight.exe'
-        $rc = Complete-Pairing $moonlight @('pair', '127.0.0.1', '--pin', $Pin) 'Moonlight' (Join-Path $dir 'pair.log')
+        # Moonlight runs portable (its settings next to the exe in the stage) only when portable.dat is in its
+        # working directory; otherwise it keeps its identity and hosts in the user's registry.
+        $mdir = Join-Path $Stage 'moonlight'
+        $moonlight = Join-Path $mdir 'Moonlight.exe'
+        $rc = Complete-Pairing $moonlight @('pair', '127.0.0.1', '--pin', $Pin) 'Moonlight' (Join-Path $dir 'pair.log') $mdir
         Add-Check 'stock Moonlight pairs' ($rc -eq 0) "exit $rc"
         $since = (Get-Item $tessera.log).Length
-        $m = Start-Process -FilePath $moonlight -ArgumentList @('stream', '127.0.0.1', 'Desktop', '--display-mode', 'windowed', '--resolution', '1280x720', '--fps', '60', '--bitrate', '10000') -PassThru
+        $m = Start-Process -FilePath $moonlight -ArgumentList @('stream', '127.0.0.1', 'Desktop', '--display-mode', 'windowed', '--resolution', '1280x720', '--fps', '60', '--bitrate', '10000') -PassThru -WorkingDirectory $mdir
         Start-Sleep -Seconds $Short
-        Invoke-Tool $moonlight @('quit', '127.0.0.1') (Join-Path $dir 'quit.log') 2 | Out-Null
+        Invoke-Tool $moonlight @('quit', '127.0.0.1') (Join-Path $dir 'quit.log') 2 $mdir | Out-Null
         if (-not $m.WaitForExit(20000)) { Stop-Process -Id $m.Id -Force -ErrorAction SilentlyContinue }
         $fs = [IO.File]::Open($tessera.log, 'Open', 'Read', 'ReadWrite')
         $fs.Seek($since, 'Begin') | Out-Null
@@ -486,7 +506,7 @@ try {
     }
 
     if ($script:Results['legacy']) { Test-MultiCase 'legacy' 1 50 }
-    foreach ($c in @(@('ms2-typical', 2), @('ms2', 2), @('ms3', 3), @('ms4', 4), @('mixed', 2), @('ms4-typical', 4), @('ms2-hibr', 2), @('ms4-hibr', 4))) { if ($script:Results[$c[0]]) { Test-MultiCase $c[0] $c[1] 50 } }
+    foreach ($c in @(@('ms2-typical', 2), @('ms2', 2), @('ms3', 3), @('ms4', 4), @('mixed', 2), @('ms4-typical', 4), @('ms2-hibr', 2), @('ms4-hibr', 4), @('ms4-video', 4))) { if ($script:Results[$c[0]]) { Test-MultiCase $c[0] $c[1] 50 } }
     if ($script:Results['limit']) {
         $r = $script:Results['limit'].report
         Add-Check 'limit: 4 requested, host allows 2' ($r -and $r.streams -eq 2 -and $r.launch.reason -eq 'host-limit') "streams $($r.streams), reason $($r.launch.reason)"
