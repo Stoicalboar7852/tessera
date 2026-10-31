@@ -174,8 +174,12 @@ function Complete-Pairing([string]$exe, [string[]]$arguments, [string]$name, [st
             break
         }
     }
-    if (-not $p.WaitForExit(90000)) { $p.Kill(); return -999 }
-    return $p.ExitCode
+    if ($p.WaitForExit(90000)) { return $p.ExitCode }
+    # Moonlight's command-line pairing keeps its window open after success: the host's client list decides
+    $p.Kill()
+    $clients = (Invoke-WebApi GET '/api/clients/list' '') | ConvertFrom-Json
+    if (@($clients.named_certs | Where-Object { $_.name -eq $name }).Count -gt 0) { return 0 }
+    return -999
 }
 
 # --- Displays and animation --------------------------------------------------------------------------------------
@@ -228,13 +232,14 @@ function Wait-NewScreens([string[]]$before, [int]$count, [int]$timeoutSeconds = 
     return @(Get-Screens | Where-Object { $before -notcontains $_.name } | Sort-Object { $_.x })
 }
 
-function Start-Animations($screens, [string]$mode) {
+function Start-Animations($screens, [string]$mode, [string]$dir) {
     $procs = @()
     $screens = @($screens | Where-Object { $_ })
     for ($i = 0; $i -lt $screens.Count; $i++) {
         $s = $screens[$i]
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Quote (Join-Path $Stage 'Show-AnimatedWindow.ps1')),
-            '-X', $s.x, '-Y', $s.y, '-Width', $s.w, '-Height', $s.h, '-Label', (Quote "Stream $i  $($s.name)"))
+            '-X', $s.x, '-Y', $s.y, '-Width', $s.w, '-Height', $s.h, '-Label', (Quote "Stream $i  $($s.name)"),
+            '-LogFile', (Quote (Join-Path $dir "anim$i.log")))
         if ($mode -eq 'typical' -and $i -gt 0) { $arguments += '-Static' }
         $procs += Start-Process powershell.exe -ArgumentList $arguments -WindowStyle Hidden -PassThru
     }
@@ -263,7 +268,7 @@ function Invoke-ClientCase([string]$case, [string]$displays, [int]$seconds, [str
     }
     $streamScreens | ConvertTo-Json -Depth 3 | Set-Content -Encoding UTF8 (Join-Path $dir 'screens.json')
     $anim = @()
-    if ($animate -ne 'none') { $anim = Start-Animations $streamScreens $animate }
+    if ($animate -ne 'none') { $anim = Start-Animations $streamScreens $animate $dir }
 
     if (-not $client.WaitForExit(($seconds + 90) * 1000)) { $client.Kill(); Log "  $case : client timed out" }
     Stop-Animations $anim
@@ -275,7 +280,13 @@ function Invoke-ClientCase([string]$case, [string]$displays, [int]$seconds, [str
     }
     $report = $null
     if (Test-Path (Join-Path $dir 'report.json')) { $report = Get-Content -Raw (Join-Path $dir 'report.json') | ConvertFrom-Json }
-    $script:Results[$case] = @{ report = $report; screens = $streamScreens; exit = $client.ExitCode; expected = $count }
+    # The animated windows' own paint rate (median of whole seconds), to tell the content's frame rate from the stream's
+    $content = @()
+    for ($i = 0; $i -lt @($streamScreens).Count; $i++) {
+        $rates = @(Get-Content (Join-Path $dir "anim$i.log") -ErrorAction SilentlyContinue | Select-Object -Skip 2 | ForEach-Object { [int]$_ } | Sort-Object)
+        $content += $(if ($rates.Count) { $rates[[int]($rates.Count / 2)] } else { $null })
+    }
+    $script:Results[$case] = @{ report = $report; screens = $streamScreens; exit = $client.ExitCode; expected = $count; animate = $animate; content_fps = $content }
     $streams = if ($report) { $report.streams } else { 'n/a' }
     Log "  $case : client exit $($client.ExitCode), streams $streams$(if ($report -and $report.error) { ', error: ' + $report.error })"
     if (-not $report -or $report.error) {
@@ -300,18 +311,19 @@ function Format-Stream($s) {
 
 function Write-Results {
     $lines = @('# Phase 2 acceptance results (multistream)', '', "Run: $script:Started .. $(Get-Date -Format o)", "Machine: $env:COMPUTERNAME", '',
-        'Per stream: size | fps | frames | host processing latency p50 / p95 (ms) | assembly p50 / p95 (ms) | FEC failures', '',
-        '| Case | Requested | Streams | Reason | Stream | Size | fps | Frames | Host latency p50 / p95 | Assembly p50 / p95 | FEC failed |',
-        '|---|---|---|---|---|---|---|---|---|---|---|')
+        'Per stream: size | fps received | frames | host processing latency p50 / p95 (ms) | assembly p50 / p95 (ms) | FEC failures | content fps (the animated window''s own paint rate; static = quiet display)', '',
+        '| Case | Requested | Streams | Reason | Stream | Size | fps | Frames | Host latency p50 / p95 | Assembly p50 / p95 | FEC failed | Content fps |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|')
     foreach ($case in $Cases) {
         $r = $script:Results[$case]
         if (-not $r) { continue }
         $rep = $r.report
-        if (-not $rep) { $lines += "| $case | $($r.expected) | (no report) |  |  |  |  |  |  |  |  |"; continue }
-        if ($rep.error) { $lines += "| $case | $($r.expected) | error: $($rep.error) |  |  |  |  |  |  |  |  |"; continue }
+        if (-not $rep) { $lines += "| $case | $($r.expected) | (no report) |  |  |  |  |  |  |  |  |  |"; continue }
+        if ($rep.error) { $lines += "| $case | $($r.expected) | error: $($rep.error) |  |  |  |  |  |  |  |  |  |"; continue }
         $i = 0
         foreach ($s in @($rep.per_stream)) {
-            $lines += "| $case | $($r.expected) | $($rep.streams) | $($rep.launch.reason) | $i | $(Format-Stream $s) |"
+            $content = if ($r.animate -eq 'typical' -and $i -gt 0) { 'static' } elseif ($null -ne @($r.content_fps)[$i]) { @($r.content_fps)[$i] } else { '' }
+            $lines += "| $case | $($r.expected) | $($rep.streams) | $($rep.launch.reason) | $i | $(Format-Stream $s) | $content |"
             $i++
         }
     }
@@ -334,8 +346,11 @@ function Test-MultiCase([string]$case, [int]$expected, [double]$minFps) {
     for ($i = 0; $i -lt [int]$rep.streams; $i++) {
         $s = @($rep.per_stream)[$i]
         $png = Join-Path $OutDir "cases\$case\stream$i.png"
-        if ($s.frames -lt 1 -or $s.fps -lt $minFps -or $s.rtp.fec_failed -gt 0 -or -not (Test-Path $png)) { $ok = $false }
-        $details += ('s{0}: {1:N0} fps, {2} FEC failed, snapshot {3}' -f $i, $s.fps, $s.rtp.fec_failed, $(if (Test-Path $png) { 'ok' } else { 'missing' }))
+        # A quiet display only gets Sunshine's minimum frame rate; an animated one must deliver what the content draws
+        $content = @($r.content_fps)[$i]
+        $want = if ($r.animate -eq 'typical' -and $i -gt 0) { 1 } elseif ($null -ne $content) { 0.9 * [Math]::Min([double]$content, $minFps / 0.9) } else { $minFps }
+        if ($s.frames -lt 1 -or $s.fps -lt $want -or $s.rtp.fec_failed -gt 0 -or -not (Test-Path $png)) { $ok = $false }
+        $details += ('s{0}: {1:N0} fps (content {2}), {3} FEC failed, snapshot {4}' -f $i, $s.fps, $(if ($null -ne $content) { $content } else { '-' }), $s.rtp.fec_failed, $(if (Test-Path $png) { 'ok' } else { 'missing' }))
     }
     Add-Check $case $ok ($details -join '; ')
 }
@@ -414,7 +429,8 @@ try {
         $fs.Close()
         $text | Set-Content -Encoding UTF8 (Join-Path $dir 'host-log-excerpt.txt')
         $connected = $text -match 'CLIENT CONNECTED'
-        $multistream = $text -match 'Multistream:'
+        # (The encoder probe also logs "Multistream: N concurrent encoder sessions" on every launch.)
+        $multistream = $text -match 'Multistream: (\d+ of \d+ displays|one stream|virtual displays)'
         Add-Check 'stock Moonlight streams from the Tessera host as from upstream' ($connected -and -not $multistream) "client connected: $connected, multistream used: $multistream"
     }
 
