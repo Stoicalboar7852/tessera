@@ -6,7 +6,7 @@ _Last updated: 2026-10-31_
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
 | 1 – VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
-| 2 – Protocol and host multi-stream | **In progress.** Design approved 2026-10-30 (ADR 0007 accepted). Protocol, common-c, host (virtual displays, encoder probe, permissions), test client and harness are implemented; CI builds them. The acceptance run (elevated) is next. | See "Phase 2 progress". |
+| 2 – Protocol and host multi-stream | **In progress.** Design approved 2026-10-30 (ADR 0007 accepted). Protocol, common-c, host (virtual displays, encoder probe, permissions), test client and harness are implemented; CI builds them. Acceptance runs 1–3 pass everything except the extra streams' frame rate with 3–4 displays; run 4 is next. | See "Phase 2 progress". |
 | 3–12 | Not started | |
 
 ## Phase 2 progress
@@ -25,7 +25,19 @@ _Last updated: 2026-10-31_
   in the web UI. The driver needed no change.
 - **Test tools**: `tools/mstream-client` (pairs, launches with a display list, per-stream statistics and raw video);
   `tools/tests/Run-MultiStreamTest.ps1` (elevated acceptance run) and `Prepare-MultiStreamTest.ps1`.
-- **Next**: the acceptance run on the dev PC, `docs/perf.md` latency rows, the Phase 2 summary.
+- **Acceptance runs 1–3** (2026-10-31, 60 s cases, `logs\mstream\`):
+  - working: 2, 3 and 4 streams with zero FEC failures and the right display in each stream; the mixed
+    1440p + 59.94 Hz pair; the host limit (2 of 4, `host-limit`); the host killed mid-session (displays gone,
+    `recover.exe` restores the topology); the test client against stock Sunshine (one stream); the mouse at each
+    stream's centre; topology as before at the end;
+  - host processing latency, localhost: 1.6–1.7 ms with one stream (the same as stock Sunshine), at most 3.0 ms
+    p50 / 4.9 ms p95 with four, so about 0.5 ms p50 and 1.1 ms p95 per additional display;
+  - **open: frame rate.** With 3 or 4 displays the extra streams get about 48 fps (2 displays: 54–60) while each
+    GDI test window draws 64 fps; nothing is lost after encoding. Two virtual displays showing the animated
+    wallpaper got 59 fps. Run 4 measures where frames go (host capture counters) and adds video-like content;
+  - stock Moonlight streamed in run 2 but failed in run 3 because it wasn't portable (harness fixed).
+- **Next**: run 4 (full length per the design: 5 min per case), the frame-rate finding, `docs/perf.md` latency
+  rows, the Phase 2 summary.
 
 ## Phase 1 progress
 - **Freeze analysis** (`docs/vdd-freeze-analysis.md`): source and issue-tracker review, plus measurements on the
