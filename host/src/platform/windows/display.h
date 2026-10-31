@@ -627,6 +627,18 @@ namespace platf::dxgi {
     std::chrono::steady_clock::time_point last_protected_content_warning_time {};  ///< Last protected content warning time.
 
     /**
+     * @brief [fork] Tessera: frame counts for one output, logged every 20 s at debug level, to tell frames Windows
+     * did not compose from frames the capture missed.
+     */
+    struct tessera_capture_stats_t {
+      std::string output;  ///< Output name (for example \\.\DISPLAY74).
+      std::chrono::steady_clock::time_point since {};  ///< Start of the current period.
+      std::uint64_t acquired {};  ///< Frames acquired with a new desktop image.
+      std::uint64_t composed {};  ///< Desktop images Windows composed for them (sum of AccumulatedFrames).
+      std::uint64_t timeouts {};  ///< AcquireNextFrame calls that timed out.
+    } tessera_stats;  ///< [fork] Tessera: capture statistics.
+
+    /**
      * @brief Initialize WGC capture for the selected display.
      *
      * @param display Display object or identifier associated with the operation.

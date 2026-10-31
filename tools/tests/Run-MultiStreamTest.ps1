@@ -5,9 +5,9 @@
 
 .DESCRIPTION
   Run elevated (the virtual display driver's control interface is admin-only) from the interactive session, and leave
-  the PC alone for about 30 minutes. Nothing outside the run folder and the stage is changed for good: the host test
-  instances use their own config folders, the virtual display driver is installed for the run and removed at the
-  end, and the display topology is compared with the one saved at the start.
+  the PC alone for about 50 minutes (about 15 with -Seconds 60). Nothing outside the run folder and the stage is
+  changed for good: the host test instances use their own config folders, the virtual display driver is installed for
+  the run and removed at the end, and the display topology is compared with the one saved at the start.
 
   Needs, under <project>\stage\phase2 (tools\tests\Prepare-MultiStreamTest.ps1 fills it):
     host\            the Tessera host build (sunshine.exe + assets) from CI
@@ -16,15 +16,21 @@
     ffmpeg\x\...\bin\ffmpeg.exe  for snapshots
   and the native MinGW build (mstream-client, vdd-install, recover, topoctl) and the signed driver package.
 
-  Cases (each a folder under the run folder with the client's report.json, snapshots and logs):
-    legacy        1 display, no display list (today's session) - the latency baseline on this host
-    ms2-typical   2 x 1080p60, only display 0 animated; mouse moved to each stream's centre
-    ms2/ms3/ms4   2/3/4 x 1080p60, every display animated (worst case)
-    mixed         2560x1440@60 + 1920x1080@59.94
+  Cases (each a folder under the run folder with the client's report.json, snapshots and logs). "Full" cases run for
+  -Seconds (default 300, as in the design), "short" ones for at most 120 s. The total bitrate is 20 Mbps unless noted.
+    legacy        full: 1 display, no display list (today's session) - the latency baseline on this host
+    ms2-typical   short: 2 x 1080p60, only display 0 animated; mouse moved to each stream's centre
+    ms2/ms3/ms4   full: 2/3/4 x 1080p60, every display animated (worst case)
+    mixed         full: 2560x1440@60 + 1920x1080@59.94
+    ms4-typical   short: 4 x 1080p60, only display 0 animated
+    ms2-hibr/ms4-hibr  short: as ms2/ms4 with the total raised to 20 Mbps per display
+    ms4-120       short, diagnostic: 4 x 1080p120 (the content draws about 64 fps), to see whether the extra
+                  streams' frame rate is capped below the content's at 120 Hz as at 60 Hz
     limit         host limited to 2 streams, 4 requested: expect 2 and "host-limit"
     kill          host killed during a 2-stream session: displays must go, recover.exe must restore the topology
-    stock-moonlight  stock Moonlight streams Desktop from the Tessera host for 60 s
-    stock-sunshine   the test client asks stock Sunshine for 2 displays: expect 1 stream that works
+    stock-moonlight  short: stock Moonlight streams Desktop from the Tessera host
+    stock-sunshine   full: the test client asks stock Sunshine for 2 displays: expect 1 stream that works (and the
+                  stock host's latency baseline)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File "D:\Remote streaming\src\tools\tests\Run-MultiStreamTest.ps1"   # elevated
@@ -32,14 +38,16 @@
 param(
     [string]$ProjectRoot,
     [string]$OutDir,
-    [string[]]$Cases
+    [string[]]$Cases,
+    [int]$Seconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not $ProjectRoot) { $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot ('logs\mstream\' + (Get-Date -Format 'yyyyMMdd-HHmm')) }
 $Stage = Join-Path $env:ProgramData 'Tessera\mstream-test'
-$AllCases = 'legacy', 'ms2-typical', 'ms2', 'ms3', 'ms4', 'mixed', 'limit', 'kill', 'stock-moonlight', 'stock-sunshine'
+$AllCases = 'legacy', 'ms2-typical', 'ms2', 'ms3', 'ms4', 'mixed', 'ms4-typical', 'ms2-hibr', 'ms4-hibr', 'ms4-120', 'limit', 'kill', 'stock-moonlight', 'stock-sunshine'
+$Short = [Math]::Min(120, $Seconds)
 if (-not $Cases) { $Cases = $AllCases }
 $WebUser = 'tessera-test'
 $WebPass = [guid]::NewGuid().ToString('N')  # this run only; never written outside the run's host config
@@ -327,8 +335,30 @@ function Write-Results {
             $i++
         }
     }
+    # Worst stream per case, and what each additional display adds against the legacy (one-stream) session. A quiet
+    # display's repeated frames keep their old capture time, so the typical cases count only the busy display; the
+    # extra is only given where every stream has the baseline's size.
+    $base = $script:Results['legacy']
+    $b = if ($base -and $base.report -and -not $base.report.error) { @($base.report.per_stream)[0] } else { $null }
+    $lines += @('', 'Host processing latency per case: worst animated stream, and the extra per additional display against legacy', '',
+        '| Case | Streams | Worst p50 / p95 (ms) | Extra per additional display p50 / p95 (ms) |', '|---|---|---|---|')
+    foreach ($case in $Cases) {
+        $r = $script:Results[$case]
+        $rep = $r.report
+        if (-not $rep -or $rep.error) { continue }
+        $all = @($rep.per_stream)
+        $busy = if ($r.animate -eq 'typical') { @($all[0]) } else { $all }
+        $p50 = ($busy | ForEach-Object { $_.host_latency_ms.p50 } | Measure-Object -Maximum).Maximum
+        $p95 = ($busy | ForEach-Object { $_.host_latency_ms.p95 } | Measure-Object -Maximum).Maximum
+        $sameSize = $b -and -not ($all | Where-Object { $_.width -ne $b.width -or $_.height -ne $b.height })
+        $extra = if ($sameSize -and $all.Count -gt 1) { '{0:N2} / {1:N2}' -f (($p50 - $b.host_latency_ms.p50) / ($all.Count - 1)), (($p95 - $b.host_latency_ms.p95) / ($all.Count - 1)) } else { '-' }
+        $lines += '| {0} | {1} | {2:N2} / {3:N2} | {4} |' -f $case, $all.Count, $p50, $p95, $extra
+    }
     $lines += @('', 'Checks:')
     foreach ($c in $script:Checks) { $lines += "- $c" }
+    # The host's per-display capture statistics (every 20 s; the case times are in harness.log)
+    $capture = @(Get-ChildItem $OutDir -Recurse -Filter 'sunshine-*.log' -ErrorAction SilentlyContinue | Select-String -SimpleMatch 'Tessera: capture' | ForEach-Object { $_.Line })
+    if ($capture.Count) { $lines += @('', 'Capture statistics (host, per display, every 20 s):', '', '```') + $capture + '```' }
     $lines | Set-Content -Encoding ASCII (Join-Path $OutDir 'results.md')
 }
 
@@ -376,12 +406,18 @@ try {
     $rc = Complete-Pairing (Join-Path $Stage 'mstream-client.exe') @('pair', '--host', '127.0.0.1', '--pin', $Pin, '--identity', (Quote (Join-Path $OutDir 'identity-tessera'))) 'mstream-client' (Join-Path $OutDir 'pair-tessera.log')
     Add-Check 'pair test client with the Tessera host' ($rc -eq 0) "exit $rc"
 
-    if ($Cases -contains 'legacy') { Log 'case legacy'; Invoke-ClientCase 'legacy' '1920x1080@60' 60 'worst' @('--legacy') }
-    if ($Cases -contains 'ms2-typical') { Log 'case ms2-typical'; Invoke-ClientCase 'ms2-typical' '1920x1080@60,1920x1080@60' 60 'typical' @('--mouse-test') }
-    if ($Cases -contains 'ms2') { Log 'case ms2'; Invoke-ClientCase 'ms2' '1920x1080@60,1920x1080@60' 60 'worst' }
-    if ($Cases -contains 'ms3') { Log 'case ms3'; Invoke-ClientCase 'ms3' '1920x1080@60,1920x1080@60,1920x1080@60' 60 'worst' }
-    if ($Cases -contains 'ms4') { Log 'case ms4'; Invoke-ClientCase 'ms4' '1920x1080@60,1920x1080@60,1920x1080@60,1920x1080@60' 60 'worst' }
-    if ($Cases -contains 'mixed') { Log 'case mixed'; Invoke-ClientCase 'mixed' '2560x1440@60,1920x1080@59.94' 60 'worst' }
+    $d2 = '1920x1080@60,1920x1080@60'
+    $d4 = '1920x1080@60,1920x1080@60,1920x1080@60,1920x1080@60'
+    if ($Cases -contains 'legacy') { Log 'case legacy'; Invoke-ClientCase 'legacy' '1920x1080@60' $Seconds 'worst' @('--legacy') }
+    if ($Cases -contains 'ms2-typical') { Log 'case ms2-typical'; Invoke-ClientCase 'ms2-typical' $d2 $Short 'typical' @('--mouse-test') }
+    if ($Cases -contains 'ms2') { Log 'case ms2'; Invoke-ClientCase 'ms2' $d2 $Seconds 'worst' }
+    if ($Cases -contains 'ms3') { Log 'case ms3'; Invoke-ClientCase 'ms3' '1920x1080@60,1920x1080@60,1920x1080@60' $Seconds 'worst' }
+    if ($Cases -contains 'ms4') { Log 'case ms4'; Invoke-ClientCase 'ms4' $d4 $Seconds 'worst' }
+    if ($Cases -contains 'mixed') { Log 'case mixed'; Invoke-ClientCase 'mixed' '2560x1440@60,1920x1080@59.94' $Seconds 'worst' }
+    if ($Cases -contains 'ms4-typical') { Log 'case ms4-typical'; Invoke-ClientCase 'ms4-typical' $d4 $Short 'typical' }
+    if ($Cases -contains 'ms2-hibr') { Log 'case ms2-hibr'; Invoke-ClientCase 'ms2-hibr' $d2 $Short 'worst' @('--bitrate', '40000') }
+    if ($Cases -contains 'ms4-hibr') { Log 'case ms4-hibr'; Invoke-ClientCase 'ms4-hibr' $d4 $Short 'worst' @('--bitrate', '80000') }
+    if ($Cases -contains 'ms4-120') { Log 'case ms4-120'; Invoke-ClientCase 'ms4-120' '1920x1080@120,1920x1080@120,1920x1080@120,1920x1080@120' $Short 'worst' }
     Test-Topology 'after-multistream' | Out-Null
 
     if ($Cases -contains 'limit') {
@@ -420,7 +456,7 @@ try {
         Add-Check 'stock Moonlight pairs' ($rc -eq 0) "exit $rc"
         $since = (Get-Item $tessera.log).Length
         $m = Start-Process -FilePath $moonlight -ArgumentList @('stream', '127.0.0.1', 'Desktop', '--display-mode', 'windowed', '--resolution', '1280x720', '--fps', '60', '--bitrate', '10000') -PassThru
-        Start-Sleep -Seconds 60
+        Start-Sleep -Seconds $Short
         Invoke-Tool $moonlight @('quit', '127.0.0.1') (Join-Path $dir 'quit.log') 2 | Out-Null
         if (-not $m.WaitForExit(20000)) { Stop-Process -Id $m.Id -Force -ErrorAction SilentlyContinue }
         $fs = [IO.File]::Open($tessera.log, 'Open', 'Read', 'ReadWrite')
@@ -443,14 +479,14 @@ try {
         $identity = Join-Path $OutDir 'identity-stock'
         $rc = Complete-Pairing (Join-Path $Stage 'mstream-client.exe') @('pair', '--host', '127.0.0.1', '--pin', $Pin, '--identity', (Quote $identity)) 'mstream-client' (Join-Path $OutDir 'pair-stock.log')
         Add-Check 'pair test client with stock Sunshine' ($rc -eq 0) "exit $rc"
-        Invoke-ClientCase 'stock-sunshine' '1920x1080@60,1920x1080@60' 30 'worst' @() $identity
+        Invoke-ClientCase 'stock-sunshine' '1920x1080@60,1920x1080@60' $Seconds 'worst' @() $identity
         Stop-HostInstance $stock
         $r = $script:Results['stock-sunshine'].report
         Add-Check 'test client falls back to one stream with stock Sunshine' ($r -and $r.streams -eq 1 -and -not $r.launch.streams -and @($r.per_stream)[0].frames -gt 0) "streams $($r.streams), frames $(@($r.per_stream)[0].frames)"
     }
 
     if ($script:Results['legacy']) { Test-MultiCase 'legacy' 1 50 }
-    foreach ($c in @(@('ms2-typical', 2), @('ms2', 2), @('ms3', 3), @('ms4', 4), @('mixed', 2))) { if ($script:Results[$c[0]]) { Test-MultiCase $c[0] $c[1] 50 } }
+    foreach ($c in @(@('ms2-typical', 2), @('ms2', 2), @('ms3', 3), @('ms4', 4), @('mixed', 2), @('ms4-typical', 4), @('ms2-hibr', 2), @('ms4-hibr', 4))) { if ($script:Results[$c[0]]) { Test-MultiCase $c[0] $c[1] 50 } }
     if ($script:Results['limit']) {
         $r = $script:Results['limit'].report
         Add-Check 'limit: 4 requested, host allows 2' ($r -and $r.streams -eq 2 -and $r.launch.reason -eq 'host-limit') "streams $($r.streams), reason $($r.launch.reason)"

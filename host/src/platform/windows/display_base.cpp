@@ -130,6 +130,12 @@ namespace platf::dxgi {
     DXGI_OUTDUPL_DESC dup_desc;
     dup->GetDesc(&dup_desc);
 
+    // [fork] Tessera: name the output in the capture statistics
+    if (DXGI_OUTPUT_DESC output_desc; SUCCEEDED(display->output->GetDesc(&output_desc))) {
+      tessera_stats.output = utf_utils::to_utf8(output_desc.DeviceName);
+    }
+    tessera_stats.since = std::chrono::steady_clock::now();
+
     BOOST_LOG(info) << "Desktop resolution ["sv << dup_desc.ModeDesc.Width << 'x' << dup_desc.ModeDesc.Height << ']';
     BOOST_LOG(info) << "Desktop format ["sv << display->dxgi_format_to_string(dup_desc.ModeDesc.Format) << ']';
 
@@ -154,6 +160,19 @@ namespace platf::dxgi {
     }
 
     auto status = dup->AcquireNextFrame(timeout.count(), &frame_info, res_p);
+
+    // [fork] Tessera: capture statistics
+    if (status == S_OK && frame_info.LastPresentTime.QuadPart != 0) {
+      ++tessera_stats.acquired;
+      tessera_stats.composed += frame_info.AccumulatedFrames;
+    } else if (status == DXGI_ERROR_WAIT_TIMEOUT) {
+      ++tessera_stats.timeouts;
+    }
+    if (const auto now = std::chrono::steady_clock::now(); now - tessera_stats.since >= 20s) {
+      const double seconds = std::chrono::duration<double>(now - tessera_stats.since).count();
+      BOOST_LOG(debug) << "Tessera: capture " << tessera_stats.output << ": " << tessera_stats.acquired / seconds << " fps acquired, " << tessera_stats.composed / seconds << " fps composed, " << tessera_stats.timeouts << " timeouts in " << seconds << " s";
+      tessera_stats = {tessera_stats.output, now};
+    }
 
     switch (status) {
       case S_OK:
