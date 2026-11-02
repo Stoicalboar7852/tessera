@@ -114,29 +114,34 @@ at the slider maximum); with a custom bitrate, the user's value is the total. co
 
 **Launch:** `NvHTTP::startApp` appends `tmsv=1&tmsd=<list>` when the host advertises `TesseraMultiStream` and more
 than one display is chosen, and returns `TesseraStreams` / `TesseraReason`. Fewer streams than asked for, or a stock
-host, produce a launch warning (the existing yellow banner) naming the reason, for example "Multi-display is not
-enabled for this client in the host's web UI".
+host, produce a message in stream 0's status overlay naming the reason, for example "multi-display is not enabled for
+this client in the host's web UI" (the launch banner is gone by then). With automatic bitrate, the total then covers
+only the displays that stream. Problems known before launch (fewer than two chosen displays connected, more than four
+chosen) use the launch banner.
 
-### 5. Stream windows: `app/streaming/tessera/streamwindow.{h,cpp}` and `multidisplay.{h,cpp}`
+### 5. Stream windows: `app/streaming/tessera/multidisplay.{h,cpp}` and `videostats.{h,cpp}`
 
-`MultiDisplay` (owned by `Session`) holds the plan and one `StreamWindow` per extra stream, and passes
-`LiTesseraConfigure()` the displays, the extra decoder callbacks and the `TESSERA_CALLBACKS`.
+`MultiDisplay` (owned by `Session`) holds the plan and one `StreamWindow` record per extra stream, and passes
+`LiTesseraConfigure()` the displays, the extra decoder callbacks (with the `StreamWindow` as renderer context) and
+the `TESSERA_CALLBACKS`.
 
-Each `StreamWindow` has:
-- its own SDL window, created borderless fullscreen (`SDL_WINDOW_FULLSCREEN_DESKTOP`) on its monitor's bounds;
+Each extra stream has:
+- its own SDL window, created on its monitor and made borderless fullscreen (`SDL_WINDOW_FULLSCREEN_DESKTOP`);
 - its own `FFmpegVideoDecoder` (and so its own renderer, pacer and V-sync source, which already follow the window's
-  monitor), chosen with the same `Session::chooseDecoder()` and the same preferences;
-- a decoder lock and setup/submit trampolines (common-c's `submitDecodeUnit` has no context argument, so streams 1–3
-  get one static function each);
-- the window-event handling that recreates the decoder on size, display or device changes, following the upstream
-  code for stream 0.
+  monitor), chosen with the same `Session::chooseDecoder()` and the same preferences. It pulls its frames, so no
+  submit trampolines are needed, and only pull renderers can stream several displays;
+- a decoder lock, and the window-event handling that recreates the decoder on size, display or device changes,
+  following the upstream code for stream 0.
 
-The decoder learns its stream index (`FFmpegVideoDecoder::setTesseraStream(i)`) and uses the per-stream pull, IDR,
-HDR and statistics calls for i > 0. This is about ten marked lines in `ffmpeg.cpp`.
+The decoder learns its stream index (`DECODER_PARAMETERS::tesseraStream`) and uses the per-stream pull, IDR, HDR and
+statistics calls (stream 0 maps to upstream's). About twenty marked lines in `ffmpeg.cpp`.
 
 **Event routing:** before the event loop's `switch`, `MultiDisplay::handleEvent()` takes window events for extra
-windows (by window ID) and frame-ready events from their pacers. The pacer adds itself as `event.user.data1` to its
-`SDL_CODE_FRAME_READY` event (one marked line), so main-thread renderers draw the right window.
+windows (by window ID). Frame-ready events from main-thread renderers' pacers carry no window, so on each one every
+extra decoder renders too (a renderer with no new frame does nothing); `pacer.cpp` stays unchanged.
+
+**Messages after launch** (fewer streams than chosen, a stopped stream) go to stream 0's status overlay for 10
+seconds, because the launch banner is only shown before the stream starts.
 
 **HDR:** each window switches HDR when the host says so for its stream (`TESSERA_CALLBACKS.setHdrMode`). Stream 0
 keeps the upstream callback.
@@ -202,15 +207,15 @@ host option is small.
 ## Files to touch
 
 New (Tessera only): `clients/qt/app/streaming/tessera/` (`monitors*`, `displayselection*`, `multidisplay*`,
-`streamwindow*`, `displayplan.{h,cpp}` for the layout and stream order), `clients/qt/app/gui/TesseraDisplays.qml`,
+`videostats*`, `inputrouting.cpp`, `displayplan.{h,cpp}` for the layout and stream order), `clients/qt/app/gui/TesseraDisplays.qml`,
 `clients/qt/tests/tessera/` (QtTest for layout and selection), `docs/adr/0008-clients-use-common-c.md`,
 `docs/tests/phase-3-acceptance.md`, `tools/tests/Run-QtClientTest.ps1`, `tools/tests/Collect-ClientLogs.ps1` / `.sh`.
 
 Changed, marked `[fork] Tessera` (upstream files): `moonlight-common-c.pro`, `app/app.pro`, `app/main.cpp` (register
 the settings singleton), `app/qml.qrc`, `streaming/session.{h,cpp}` (configure, create and route extra windows, focus
-check, teardown), `backend/nvhttp.{h,cpp}` (launch arguments and reply), `video/ffmpeg.{h,cpp}` (stream index),
-`ffmpeg-renderers/pacer/pacer.cpp` (event data), `input/{input.h,input.cpp,mouse.cpp}`, `gui/SettingsView.qml`
-(include the section).
+check, teardown), `backend/nvhttp.{h,cpp}` (launch arguments and reply), `video/decoder.h` and
+`video/ffmpeg.{h,cpp}` (stream index), `input/{input.h,input.cpp,mouse.cpp}`, `gui/SettingsView.qml` (include the
+section).
 Estimate: 250–350 marked lines, most in `session.cpp` and `mouse.cpp`.
 
 Also: `common-c/src/Tessera.h`, `TesseraControl.c`, `TesseraStreams.c` and tests; `.github/workflows/ci-client-qt.yml`;

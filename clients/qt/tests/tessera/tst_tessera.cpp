@@ -273,6 +273,12 @@ private slots:
         QCOMPARE(planBitrateKbps(plan, true, 20000, 50000, defaultKbps), 50000);
         QCOMPARE(planBitrateKbps(plan, false, 20000, 150000, defaultKbps), 20000);
         QCOMPARE(planBitrateKbps(DisplayPlan(), true, 20000, 150000, defaultKbps), 20000);
+
+        // The host accepted stream 0 only: the automatic total covers display 0 (MultiDisplay::readLaunchResponse())
+        DisplayPlan accepted = plan;
+        accepted.displays.resize(1);
+        QCOMPARE(planBitrateKbps(accepted, true, 20000, 150000, defaultKbps), 12438);
+        QCOMPARE(planBitrateKbps(accepted, false, 20000, 150000, defaultKbps), 20000);
     }
 
     void settingsRoundTrip()
