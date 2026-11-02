@@ -1,6 +1,6 @@
 # Phase 2 summary: protocol and host multi-stream
 
-_Completed 2026-11-02, awaiting confirmation. Details are in `docs/STATUS.md`, `docs/perf.md`,
+_Completed and confirmed 2026-11-02. Details are in `docs/STATUS.md`, `docs/perf.md`,
 `docs/phase-2-design.md`, `protocol/multistream.md` and ADR 0007._
 
 ## Acceptance

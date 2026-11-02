@@ -6,8 +6,9 @@ _Last updated: 2026-11-02_
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
 | 1 – VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
-| 2 – Protocol and host multi-stream | **Complete, awaiting confirmation.** Acceptance run 4 (2026-11-02, full length) passes every check: 2–4 streams and a mixed pair, stock Moonlight unchanged, fallback against stock Sunshine, display lifecycle and kill recovery, limits and the encoder probe; unit tests pass in CI. Latency on localhost: at most +1.1 ms p50 / +1.7 ms p95 per additional display. Finding: with GDI content updating slightly faster than 60 Hz, Windows composes fewer frames per virtual display when several are busy; video content gets 60 fps on all four. | Summary: `docs/phase-2-summary.md`. See also "Phase 2 progress" and `docs/perf.md`. |
-| 3–12 | Not started | |
+| 2 – Protocol and host multi-stream | **Done** (confirmed 2026-11-02). Acceptance run 4 (2026-11-02, full length) passes every check: 2–4 streams and a mixed pair, stock Moonlight unchanged, fallback against stock Sunshine, display lifecycle and kill recovery, limits and the encoder probe; unit tests pass in CI. Latency on localhost: at most +1.1 ms p50 / +1.7 ms p95 per additional display. Finding: with GDI content updating slightly faster than 60 Hz, Windows composes fewer frames per virtual display when several are busy; video content gets 60 fps on all four. | Summary: `docs/phase-2-summary.md`. See also "Phase 2 progress" and `docs/perf.md`. |
+| 3 – Qt client multi-monitor | **Design in progress** | |
+| 4–12 | Not started | |
 
 ## Phase 2 progress
 - **Design** approved 2026-10-30 (`docs/phase-2-design.md`): stock clients unchanged, the client's primary becomes
