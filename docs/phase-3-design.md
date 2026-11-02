@@ -1,0 +1,265 @@
+# Phase 3 design: Qt client multi-monitor
+
+_Status: **proposed 2026-11-02**, waiting for approval. Builds on Phase 2 (`docs/phase-2-design.md`, ADR 0007,
+`protocol/multistream.md`)._
+
+## Goal and acceptance (brief §8, F2)
+
+The Qt client streams several host displays in one session, one borderless fullscreen window per client monitor. It
+finds the client's monitors, sends them in the launch request, opens a window on each monitor it gets a stream for,
+and sends the mouse to the stream under the cursor, so moving past a window's edge carries the cursor onto the
+neighbouring display.
+
+**Acceptance (brief):** a 2-monitor Windows client and a 2-monitor macOS client each stream 2 host displays. In detail:
+
+1. **Windows client** (a laptop with one external monitor, over the LAN to the dev PC): 2 streams for 10 minutes.
+   Each window shows its own host display, fullscreen on its own monitor. Every stream decodes in hardware with no
+   decoder errors, and the per-stream statistics show the expected frame rate.
+2. **macOS client** (the MacBook Pro with one external monitor): the same.
+3. **Mouse:** in absolute mode ("optimize mouse for remote desktop") the cursor crosses from one window to the next
+   and the host cursor follows onto the matching display, in both directions. In relative (game) mode the host
+   cursor crosses displays by itself and the client keeps the mouse captured. Clicking into the other window does
+   not drop keys or release capture.
+4. **Choice of displays:** "this display", "all displays" and a chosen subset each start the right number of
+   windows on the right monitors. A single-monitor client looks and behaves as upstream Moonlight.
+5. **Fallback:** against stock Sunshine, or a host that gives fewer streams, the client streams what it gets and
+   says why (host limit, encoder limit, not permitted for this client, …).
+6. **Mixed rates:** a 120 Hz and a 180 Hz (or 60 Hz) monitor stream at their own rates in one session.
+7. **No regressions:** a single-display session behaves as upstream (same windows, settings and statistics).
+   Unit tests for the new pure code pass in CI.
+
+## What changes, at a glance
+
+```
+Qt client                                                       host (unchanged from Phase 2)
+┌────────────────────────────────────────────────────────────┐
+│ Settings: Displays = this one / all / chosen               │
+│ tessera::Monitors   → TESSERA_DISPLAY list (key, mode,     │
+│                       position, DPI, HDR)                  │
+│ NvHTTP::startApp    → /launch ...&tmsv=1&tmsd=<list>       │──▶ virtual displays laid out like the monitors
+│ Session (stream 0)  → upstream window + decoder, unchanged │◀── stream 0
+│ tessera::StreamWindow ×(n-1) → own SDL window, decoder,    │◀── streams 1..3
+│                       pacer, renderer, on its own monitor  │
+│ input: mouse events → stream of the window under cursor    │──▶ LiTesseraSendMousePosition(stream, …)
+│ common-c: /common-c (multistream), not the Qt submodule    │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Stream 0 stays upstream's stream:** the existing `Session` window, decoder and event loop. Extra streams are new
+objects next to it, and the event loop hands their events to them. With one display nothing new runs.
+
+## Components
+
+### 1. Build: the Qt client uses `/common-c` (ADR 0008, new)
+
+`clients/qt/moonlight-common-c/moonlight-common-c.pro` points `COMMON_C_DIR` at the monorepo's `/common-c` (imported
+from the same upstream commit, f900dd47, as the Qt client's submodule) and adds the `Tessera*.c` sources and
+`/protocol/include`. The submodule stays in `.gitmodules` but is no longer built; removing it from all clients is a
+later clean-up. `ci-client-qt.yml` also runs on changes to `common-c/**` and `protocol/**`.
+
+### 2. common-c additions (small, unit-tested)
+
+The Qt decoder needs per-stream versions of three calls it makes for stream 0 today:
+
+```c
+void LiTesseraRequestIdrFrame(int stream);                 // after a decoder reset
+bool LiTesseraGetCurrentHostDisplayHdrMode(int stream);
+bool LiTesseraGetHdrMetadata(int stream, PSS_HDR_METADATA metadata); // stored from TESSERA_CTRL_HDR_MODE
+```
+
+The HDR metadata is already in the `0x5410` message; common-c only has to keep it per stream. Stream 0 maps to the
+upstream functions.
+
+### 3. Monitor discovery: `app/streaming/tessera/monitors.{h,cpp}` (+ `_win.cpp`, `_mac.mm`)
+
+One `ClientMonitor` per OS monitor: name, `TESSERA_DISPLAY` (key, size, exact refresh, position, DPI, HDR) and
+whether it is the OS primary.
+
+| Field | Windows | macOS |
+|---|---|---|
+| Key (stable) | Hash of the monitor's device path from `QueryDisplayConfig` (EDID-based, survives port changes on most systems) | Hash of `CGDisplayCreateUUIDFromDisplayID` |
+| Size | Native pixel mode (`StreamUtils::getNativeDesktopMode`) | Native pixels below the notch (the same function's safe area), so the host display matches the visible area |
+| Refresh | Exact fraction from `QueryDisplayConfig` (59.94 = 60000/1001) | `CGDisplayModeGetRefreshRate`, snapped to the nearest exact fraction |
+| Position | `SDL_GetDisplayBounds` (pixels; the app is per-monitor DPI aware) | Points × each screen's backing scale, normalized so monitors touch (see below) |
+| DPI | `GetDpiForMonitor` | 96 × backing scale factor |
+| HDR | DXGI output colour space is HDR10 (`IDXGIOutput6::GetDesc1`) | `NSScreen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1` |
+
+**Layout normalization** (pure function, unit-tested): macOS positions are in points and screens can have different
+scales, so the client rebuilds the layout in pixels: monitors keep their left-to-right order and vertical alignment,
+and each touches its neighbour. Windows positions are already pixels and pass through. The host only needs the
+order and adjacency (Phase 2 lays the virtual displays out from them).
+
+**Per-display mode:** each stream uses its monitor's native resolution and refresh rate (180 Hz stays 180 Hz). A
+setting "Display resolution: Native / Desktop size" lets a user stream a Retina or 4K monitor at its scaled desktop
+size to save encoder and network load; the client then upscales.
+
+### 4. Choosing displays: `app/streaming/tessera/displayselection.{h,cpp}` + settings
+
+New preferences, stored like the others in `StreamingPreferences`:
+- `tesseraDisplays`: `This display` (default, upstream behaviour) / `All displays` / `Chosen displays`;
+- `tesseraChosenMonitors`: the keys of the chosen monitors;
+- `tesseraDisplayResolution`: `Native` / `Desktop size`.
+
+The settings page gets a "Displays" section (a new QML file included from `SettingsView.qml`) with the list of
+monitors (name, resolution, refresh, HDR) and checkboxes. It is hidden when the client has one monitor.
+
+**Stream 0** is the OS primary if it is chosen, else the monitor showing the Moonlight window. The host makes it the
+Windows primary, so the taskbar and new windows land where the user expects.
+
+**Bitrate:** with automatic bitrate on, the total is the sum of upstream's default bitrate for each display (capped
+at the slider maximum); with a custom bitrate, the user's value is the total. common-c splits it by pixel rate.
+
+**Launch:** `NvHTTP::startApp` appends `tmsv=1&tmsd=<list>` when the host advertises `TesseraMultiStream` and more
+than one display is chosen, and returns `TesseraStreams` / `TesseraReason`. Fewer streams than asked for, or a stock
+host, produce a launch warning (the existing yellow banner) naming the reason, for example "Multi-display is not
+enabled for this client in the host's web UI".
+
+### 5. Stream windows: `app/streaming/tessera/streamwindow.{h,cpp}` and `multidisplay.{h,cpp}`
+
+`MultiDisplay` (owned by `Session`) holds the plan and one `StreamWindow` per extra stream, and passes
+`LiTesseraConfigure()` the displays, the extra decoder callbacks and the `TESSERA_CALLBACKS`.
+
+Each `StreamWindow` has:
+- its own SDL window, created borderless fullscreen (`SDL_WINDOW_FULLSCREEN_DESKTOP`) on its monitor's bounds;
+- its own `FFmpegVideoDecoder` (and so its own renderer, pacer and V-sync source, which already follow the window's
+  monitor), chosen with the same `Session::chooseDecoder()` and the same preferences;
+- a decoder lock and setup/submit trampolines (common-c's `submitDecodeUnit` has no context argument, so streams 1–3
+  get one static function each);
+- the window-event handling that recreates the decoder on size, display or device changes, following the upstream
+  code for stream 0.
+
+The decoder learns its stream index (`FFmpegVideoDecoder::setTesseraStream(i)`) and uses the per-stream pull, IDR,
+HDR and statistics calls for i > 0. This is about ten marked lines in `ffmpeg.cpp`.
+
+**Event routing:** before the event loop's `switch`, `MultiDisplay::handleEvent()` takes window events for extra
+windows (by window ID) and frame-ready events from their pacers. The pacer adds itself as `event.user.data1` to its
+`SDL_CODE_FRAME_READY` event (one marked line), so main-thread renderers draw the right window.
+
+**HDR:** each window switches HDR when the host says so for its stream (`TESSERA_CALLBACKS.setHdrMode`). Stream 0
+keeps the upstream callback.
+
+**A stream that stops** (host reports `TESSERA_STREAM_STOPPED`): its window shows a short message and closes; the
+other streams continue.
+
+**A streamed monitor that disappears** (unplugged, or the laptop lid closes): in v1 the session ends with a clear
+message. Changing streams mid-session needs a protocol extension and comes later.
+
+**Statistics overlay:** the overlay stays on the stream 0 window (upstream's overlay manager has one renderer) and
+gains one line per extra stream (resolution, fps received/decoded/rendered, decode and render time, drops). Every 10
+seconds the client also writes each stream's statistics to its log, which the tests read.
+
+**Fullscreen toggle (Ctrl+Alt+Shift+X)** applies to all windows. Windowed multi-display puts each window on its own
+monitor at 80 % size; it is mainly for testing on one machine.
+
+**macOS:** multi-display sessions use `SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES=0` (borderless windows on the current
+Spaces, no Space-switch animation, and the cursor moves freely between monitors). The menu bar and Dock are hidden
+while the app is active.
+
+### 6. Input: `input/mouse.cpp`, `input/input.cpp` (marked edits)
+
+- **Absolute mode:** a mouse event's window ID selects the stream. The position inside that window's video area goes
+  to `LiTesseraSendMousePosition(stream, x, y, w, h)`. The pointer is never locked to a window in a multi-display
+  session, so the OS cursor crosses monitors normally and the host cursor follows onto the matching display. Moving
+  onto a client monitor that is not streamed leaves the video, as moving out of a window does today.
+- **Relative mode:** unchanged. The focused window holds relative capture and the host moves its cursor across its
+  displays, which are laid out like the client's monitors, so the host cursor appears in the right window.
+- **Focus:** focus moving between our own windows is not a focus loss. On `FOCUS_LOST`, the handler checks whether
+  another stream window now has keyboard focus; if so it does not raise keys, mute audio or release capture.
+  Keyboard grab ("capture system keys") follows the focused stream window.
+- Buttons, wheel, keyboard, gamepads and touch are session-wide and unchanged.
+
+## High refresh rates and VRR (requested 2026-11-02)
+
+**High refresh (e.g. a 180 Hz monitor and a 120 Hz laptop):** this needs no doubling. Each stream runs at its
+monitor's own rate: the virtual display is created at that rate (the driver accepts 23–500 Hz) and the stream asks
+for that frame rate. Games present through DXGI and get every frame onto the virtual display; Phase 2's shortfall
+only happened with GDI windows repainting slightly faster than the refresh rate on several busy 60 Hz displays. What
+is not known yet, and Phase 3 measures:
+- **Encoder throughput.** 2560×1440 at 180 Hz plus a MacBook Pro panel at 120 Hz is about 1.3–1.6 gigapixels per
+  second on the RTX 4060 Ti's single NVENC engine, more than the Phase 2 tests asked of it. The "Desktop size"
+  option above is the fallback if it can't keep up.
+- **180 Hz virtual displays** have not run yet. At 2560×1440 the timing is too fast for an EDID detailed timing, so
+  the driver describes the 60 Hz variant in the EDID and the exact mode in its mode list; this needs a real run.
+- **Client decoding** of two high-rate streams on the MacBook Pro and on the Windows laptop.
+
+**Doubling the virtual display's refresh rate (Apollo's option):** not recommended. At 180 Hz it would mean a 360 Hz
+virtual display: the desktop and windowed apps would compose and render twice as often for no visible gain, and the
+encoder would see more frames to skip. If the Phase 3 measurements show missing frames at high rates, adding it as a
+host option is small.
+
+**VRR** has two halves:
+- **Client display:** show each frame as soon as it is decoded and let the monitor's VRR (G-Sync/FreeSync, or
+  ProMotion on the MacBook Pro) adapt. Upstream Moonlight does this when V-Sync is off; Phase 3 checks that it works
+  per window on each monitor. This part fits in Phase 3.
+- **Host display:** a virtual display has a fixed refresh rate, so a game at, say, 97 fps is composed on a 180 Hz
+  grid and each frame waits up to 5.6 ms (8.3 ms at 120 Hz) for the next refresh before it is streamed. A virtual
+  display that does VRR itself would remove that wait. I don't know yet whether Windows' indirect display model
+  (IddCx) allows it; that needs research. I'd record it as a feature request and look at it after Phase 3.
+
+## Files to touch
+
+New (Tessera only): `clients/qt/app/streaming/tessera/` (`monitors*`, `displayselection*`, `multidisplay*`,
+`streamwindow*`, `layout.h`), `clients/qt/app/gui/TesseraDisplays.qml`, `clients/qt/tests/tessera/` (QtTest for
+layout and selection), `docs/adr/0008-clients-use-common-c.md`, `docs/tests/phase-3-acceptance.md`,
+`tools/tests/Run-QtClientTest.ps1`, `tools/tests/Collect-ClientLogs.ps1` / `.sh`.
+
+Changed, marked `[fork] Tessera` (upstream files): `moonlight-common-c.pro`, `app/app.pro`, `streaming/session.{h,cpp}`
+(configure, create and route extra windows, focus check, teardown), `backend/nvhttp.{h,cpp}` (launch arguments and
+reply), `video/ffmpeg.{h,cpp}` (stream index), `ffmpeg-renderers/pacer/pacer.cpp` (event data), `input/{input.h,
+input.cpp,mouse.cpp}`, `settings/streamingpreferences.{h,cpp}`, `gui/SettingsView.qml` (include the section).
+Estimate: 250–350 marked lines, most in `session.cpp` and `mouse.cpp`.
+
+Also: `common-c/src/Tessera.h`, `TesseraControl.c`, `TesseraStreams.c` and tests; `.github/workflows/ci-client-qt.yml`;
+`docs/STATUS.md`, the platform matrix and `docs/perf.md`.
+
+## Tests
+
+- **CI:** common-c unit tests for the new calls; a QtTest target (layout normalization, display selection, stream 0
+  choice, bitrate totals) built and run by `ci-client-qt.yml` on Windows and macOS; the Windows and macOS builds.
+- **Dev PC, unattended** (`Run-QtClientTest.ps1`, one elevated run like Phase 2's): the CI host and the CI Qt client
+  on the same PC, the client in windowed multi-display mode with input off (on one PC the host would move the same
+  cursor the client reads) and `tessera_make_primary` off (so Windows doesn't move the client's windows). Cases:
+  1–4 streams at 1080p60, mixed sizes, 120 Hz and 180 Hz, HDR if a display allows it, stock Sunshine fallback,
+  host-limit, and a stream stopped by the host. Checks: each stream's decoded and rendered fps and decode errors from
+  the client log, and the host's capture statistics.
+- **Manual acceptance** on the Windows laptop and the MacBook Pro, each with an external monitor, following
+  `docs/tests/phase-3-acceptance.md`; a script collects the client logs. The Windows laptop run also gives the LAN
+  latency numbers Phase 2 couldn't measure (design decision 5).
+
+## Build and iteration
+
+The Qt client builds in CI today (about 9 minutes on Windows and 7 on macOS). For faster iteration I'll try a local Windows build
+(Qt 6 from aqtinstall into `T:\toolchain`, MSVC from the EWDK, upstream's `setup-deps.ps1`). If the EWDK can't link
+it, CI stays the only build. macOS builds only in CI; I can't run anything on the Mac myself.
+
+## Risks
+
+1. **Several hardware decoders and renderers in one process** (two to four D3D11VA or VideoToolbox sessions). Weak
+   laptop GPUs may refuse a second hardware decoder. Mitigation: each window probes its decoder; if one falls back
+   to software decoding, the launch warning says so.
+2. **Focus and keyboard grab across windows** (Alt+Tab, the Windows key, macOS shortcuts) is where upstream's
+   single-window assumptions run deepest. Covered by the manual tests.
+3. **macOS fullscreen without Spaces** with the notch, the menu bar on several screens and ProMotion pacing needs
+   the real Mac; I can only check it through the user.
+4. **Upstream drift:** `session.cpp` and `mouse.cpp` are busy upstream files. Keeping extra streams in new files and
+   only adding hooks keeps the merge surface small.
+5. **High refresh rates** (encoder throughput, 180 Hz virtual displays, client decoding) are unmeasured; see above.
+6. **Same-PC tests can't cover input or real fullscreen**, so mouse crossing and focus rely on the two client
+   machines.
+
+## Out of scope for Phase 3
+
+Android and iOS clients (later phases); adding or removing displays during a session; per-window statistics
+overlays; VRR on the virtual display; doubling the virtual display refresh rate.
+
+## Decisions for approval
+
+1. Build the Qt client against `/common-c` (ADR 0008). **Recommended.**
+2. Extra streams as new `StreamWindow` objects next to the unchanged stream 0 path, rather than reworking `Session`
+   into N symmetric streams. **Recommended** (smaller upstream diff; stream 0 keeps upstream's behaviour exactly).
+3. Statistics overlay on the stream 0 window only, with a line per extra stream. **Recommended.**
+4. A streamed monitor disappearing ends the session in v1. **Recommended.**
+5. Each stream at its monitor's native resolution and refresh rate, with a "Desktop size" option. **Recommended.**
+6. No refresh-rate doubling; measure first. **Recommended.**
+7. VRR: client-side presentation checked in Phase 3; virtual-display VRR recorded as a feature request for after
+   Phase 3. **Recommended.**
