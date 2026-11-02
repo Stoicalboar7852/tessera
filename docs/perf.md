@@ -4,10 +4,10 @@ Targets from the brief (§4.5). Results are added as they are measured, with dat
 
 | Target | Limit | Result | Date / build / hardware |
 |---|---|---|---|
-| Extra latency per additional display (LAN, 1080p60) | ≤ 2 ms | — | — |
+| Extra latency per additional display (LAN, 1080p60) | ≤ 2 ms | **Met on localhost; LAN not measured** (no second PC yet). Host processing latency (capture to encoded frame) is 1.7 / 1.9 ms (p50 / p95) with one stream, the same as stock Sunshine (1.6 / 1.8 ms). With every display busy, each additional display adds at most 1.1 ms p50 and 1.7 ms p95 to the slowest stream; with one busy display, nothing measurable. Details: "Phase 2: multistream acceptance". | 2026-11-02, host 95656e0da, dev PC |
 | Add or remove one virtual display | < 3 s | **Met** in run 3 (5,148 changes, stable monitor IDs): worst 1.86 s with the physical monitors on, 2.58 s headless. A batch of 8 takes at most 0.74 s. **Exception:** headless, one at a time, Windows switched the physical displays back on after half the adds; switching them off again made 26 of 800 adds take over 3 s in total (worst 3.9 s). It never happened with batches. | 2026-10-29, VDD 0.2.0, dev PC |
 | Longest system-wide stall during add/remove (1, 2, 4, 8 displays) | ≤ 250 ms; split by ADR 0006 into steady state (≤ 250 ms) and one freeze per change within the run-3 baseline | **Steady state: met. During changes: 250 ms is not met, and run 3 sets the baseline.** Each change freezes DWM and Explorer while Windows reconfigures: one display about 0.2 s (80–85 % of single changes stay under 250 ms; worst 0.34 s compose, 0.48 s Explorer), two displays 0.2–0.5 s, a batch of 8 about 0.5–1 s (worst 1.6 s; Explorer up to 3.2 s headless). Changes made back to back queue up and freeze the desktop for seconds. From 1 s after a change, nothing stalls over 250 ms. It is Windows' own cost; SudoVDA, parsec-vdd and MTT stall the same or worse. | 2026-10-29, VDD 0.2.0, dev PC |
-| Encoder session limit per GPU vendor | reported to the user | — | — |
+| Encoder session limit per GPU vendor | reported to the user | **NVIDIA RTX 4060 Ti: 4 of 4** concurrent sessions (the host probes up to `tessera_max_streams` at start, logs the result and answers `encoder-limit` when a client asks for more). AMD and Intel not measured. | 2026-11-02, driver 32.0.16.1088, dev PC |
 | Game Mode resource savings (RAM, CPU, background processes) | measured | — | — |
 
 ## Reference hardware
@@ -15,6 +15,57 @@ Targets from the brief (§4.5). Results are added as they are measured, with dat
 | Machine | CPU / GPU | Displays | Notes |
 |---|---|---|---|
 | Dev PC | Ryzen 5 7600X (AMD iGPU) + NVIDIA RTX 4060 Ti (driver 32.0.16.1088), 31 GB RAM | Dell P2417H (1920×1080@60), H32S17 (2560×1440@59.95) | Windows 11 IoT Enterprise LTSC 2024 (26100) since 2026-10-26; before: Windows 11 Pro 26200 |
+
+## Phase 2: multistream acceptance (run 4, 2026-11-02)
+
+`tools/tests/Run-MultiStreamTest.ps1`, dev PC, host build 95656e0da (CI run 41153621597), VDD 0.2.0, the test
+client (`tools/mstream-client`) on the same PC over **localhost**, HEVC, 20 Mbps in total unless noted. Raw data:
+`logs\mstream\20261102-1639` (runs 1–3: `20261031-*`). Full cases run 5 minutes, short ones 2 minutes.
+
+**Content.** "GDI" is a borderless window per display with a moving bar, repainted from a Windows Forms timer at
+about 64 Hz; its paint rate is logged. "Video" is `ffplay` showing a 60 fps test pattern through Direct3D. The
+typical cases animate display 0 only.
+
+**Host processing latency** is Moonlight's figure: from capture to the encoded frame, per frame, as the client
+receives it. It is the only part of the end-to-end latency that changes with the number of displays on the same
+link; network time on localhost is about 0, and the test client doesn't decode.
+
+| Case | Streams × mode | Content | fps per stream | Slowest stream p50 / p95 (ms) | Extra per additional display p50 / p95 (ms) |
+|---|---|---|---|---|---|
+| stock Sunshine (baseline) | 1 × 1080p60 | GDI | 37 | 1.6 / 1.8 | — |
+| legacy (Tessera, no display list) | 1 × 1080p60 | GDI | 59.9 | 1.7 / 1.9 | — |
+| ms2-typical | 2 × 1080p60 | one busy | 59.8, quiet 27.6 | 1.6 / 1.9 | 0.0 / 0.0 |
+| ms4-typical | 4 × 1080p60 | one busy | 59.4, quiet 27.4 | 1.6 / 2.8 | 0.0 / 0.3 |
+| ms2 | 2 × 1080p60 | GDI | 56.8, 57.3 | 2.8 / 3.5 | 1.1 / 1.6 |
+| ms3 | 3 × 1080p60 | GDI | 51.1–53.6 | 3.3 / 4.8 | 0.8 / 1.5 |
+| ms4 | 4 × 1080p60 | GDI (painted at 60 Hz this time) | 59.0–59.7 | 4.8 / 5.8 | 1.0 / 1.3 |
+| ms4-video | 4 × 1080p60 | video | 59.7–59.8 | 2.5 / 3.3 | 0.3 / 0.5 |
+| ms2-hibr / ms4-hibr | 2 / 4 × 1080p60, 20 Mbps each | GDI | 57.0–57.8 / 58.6–59.5 | 2.7 / 3.6, 4.8 / 5.8 | 1.0 / 1.7, 1.0 / 1.3 |
+| ms4-120 | 4 × 1080p120 | GDI (61–62 Hz) | 62.6–63.1 | 3.5 / 4.2 | 0.6 / 0.8 |
+| mixed | 2560×1440@60 + 1920×1080@59.94 | GDI | 57.9, 55.4 | 3.3 / 4.2 | (sizes differ from the baseline) |
+
+Every case: zero FEC failures, one IDR frame per stream (none requested later), each stream's snapshot shows its
+own display. The quiet displays of the typical cases get Sunshine's minimum frame rate; their p95 of about 220 ms is
+the age of repeated frames, not latency. The stock Sunshine baseline ran on the physical display, whose GDI window
+painted less often.
+
+**Latency: met on localhost.** Each additional display adds at most 1.1 ms (p50) and 1.7 ms (p95) to the slowest
+stream when every display is busy, and nothing measurable when one is. The extra is probably frames of several
+displays waiting their turn on the one NVENC engine; it was lowest with video content and highest with four
+independent GDI timers.
+
+**Frame rate: the host delivers every frame Windows composes.** The host logs, per display, the frames Desktop
+Duplication delivers and the desktop updates Windows composed for them (`AccumulatedFrames`); in every case and on
+every display the two are equal, and the client receives as many frames as were encoded. With video content all four
+displays run at 60.0 fps. With the GDI windows repainting at about 64 Hz (not in step with the 60 Hz displays),
+Windows composes fewer frames per virtual display the more of them are busy: about 60 with one, 55–58 with two,
+51–54 with three, and 48 with four in run 3 (in run 4 the four windows happened to paint at 60 Hz and got 59–60).
+At 120 Hz every content frame arrives. So the shortfall is in Windows' composition of several virtual displays
+for content that updates slightly faster than the display refresh, below the host; whether the virtual display
+driver could change it is not known. In run 3's limit case, the animated desktop wallpaper (no test windows)
+streamed at 59 fps on two virtual displays.
+
+**Not measured:** a LAN client (needs a second PC), the client's decode time, HDR streams, AMD or Intel encoders.
 
 ## Stall-probe baseline (no virtual display driver)
 

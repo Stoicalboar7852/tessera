@@ -1,12 +1,12 @@
 # Project status: Tessera
 
-_Last updated: 2026-10-31_
+_Last updated: 2026-11-02_
 
 | Phase | State | Notes |
 |---|---|---|
 | 0 – Research and setup | **Done** | Both acceptance criteria are met, and the driver and watchdog are verified in a Secure Boot VM. Summary: `docs/phase-0-summary.md`. |
 | 1 – VDD | **Done** (confirmed 2026-10-30). Three dev-PC runs did over 10,000 changes with no failure. With stable monitor IDs (run 3) every change takes under 3 s, except some headless one-at-a-time adds where Windows switches the physical monitors back on. The stall target is split (ADR 0006): steady state ≤ 250 ms is met, and display changes have a measured baseline. | Summary: `docs/phase-1-summary.md`. See also "Phase 1 progress" and `docs/perf.md`. |
-| 2 – Protocol and host multi-stream | **In progress.** Design approved 2026-10-30 (ADR 0007 accepted). Protocol, common-c, host (virtual displays, encoder probe, permissions), test client and harness are implemented; CI builds them. Acceptance runs 1–3 pass everything except the extra streams' frame rate with 3–4 displays; run 4 is next. | See "Phase 2 progress". |
+| 2 – Protocol and host multi-stream | **Complete, awaiting confirmation.** Acceptance run 4 (2026-11-02, full length) passes every check: 2–4 streams and a mixed pair, stock Moonlight unchanged, fallback against stock Sunshine, display lifecycle and kill recovery, limits and the encoder probe; unit tests pass in CI. Latency on localhost: at most +1.1 ms p50 / +1.7 ms p95 per additional display. Finding: with GDI content updating slightly faster than 60 Hz, Windows composes fewer frames per virtual display when several are busy; video content gets 60 fps on all four. | Summary: `docs/phase-2-summary.md`. See also "Phase 2 progress" and `docs/perf.md`. |
 | 3–12 | Not started | |
 
 ## Phase 2 progress
@@ -36,8 +36,17 @@ _Last updated: 2026-10-31_
     GDI test window draws 64 fps; nothing is lost after encoding. Two virtual displays showing the animated
     wallpaper got 59 fps. Run 4 measures where frames go (host capture counters) and adds video-like content;
   - stock Moonlight streamed in run 2 but failed in run 3 because it wasn't portable (harness fixed).
-- **Next**: run 4 (full length per the design: 5 min per case), the frame-rate finding, `docs/perf.md` latency
-  rows, the Phase 2 summary.
+- **Acceptance run 4** (2026-11-02, 5-minute cases, `logs\mstream\20261102-1639`, `docs/perf.md`): every check
+  passes, including stock Moonlight (2 minutes). The host now logs per display the frames Desktop Duplication
+  delivered and the frames Windows composed: they are always equal, so the host loses none.
+  - Video content (`ffplay`, Direct3D): 59.7–59.8 fps on all four displays, +0.3 / +0.5 ms per extra display.
+  - GDI windows at about 64 Hz: Windows composed 55–58 fps per display with two busy, 51–54 with three (48 with
+    four in run 3). At 120 Hz every content frame arrives. This is Windows' composition of several virtual
+    displays, below the host.
+  - Latency: at most +1.1 ms p50 and +1.7 ms p95 per additional display (slowest stream, every display busy); none
+    with one busy display. Localhost only.
+- **Not verified:** a LAN client (decision 5), HDR streams, re-claiming displays within the grace period, AMD and
+  Intel encoders, a client that decodes (Phase 3).
 
 ## Phase 1 progress
 - **Freeze analysis** (`docs/vdd-freeze-analysis.md`): source and issue-tracker review, plus measurements on the
