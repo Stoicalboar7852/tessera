@@ -1,6 +1,7 @@
 #include "input.h"
 
 #include <Limelight.h>
+#include <Tessera.h> // [fork] Tessera
 #include "SDL_compat.h"
 #include "streaming/streamutils.h"
 
@@ -36,7 +37,7 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
     }
     else if (!isCaptureActive()) {
         if (event->button == SDL_BUTTON_LEFT && event->state == SDL_RELEASED &&
-                isMouseInVideoRegion(event->x, event->y)) {
+                isMouseInVideoRegion(event->x, event->y, -1, -1, event->windowID)) { // [fork] Tessera: windowID
             // Capture the mouse again if clicked when unbound.
             // We start capture on left button released instead of
             // pressed to avoid sending an errant mouse button released
@@ -48,7 +49,8 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
         // Not capturing
         return;
     }
-    else if (m_AbsoluteMouseMode && !isMouseInVideoRegion(event->x, event->y) && event->state == SDL_PRESSED) {
+    else if (m_AbsoluteMouseMode && !isMouseInVideoRegion(event->x, event->y, -1, -1, event->windowID) && // [fork] Tessera
+             event->state == SDL_PRESSED) {
         // Ignore button presses outside the video region, but allow button releases
         return;
     }
@@ -103,6 +105,7 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
 
     // Batch all pending mouse motion events to save CPU time
     Sint32 x = event->x, y = event->y, xrel = event->xrel, yrel = event->yrel;
+    Uint32 windowId = event->windowID; // [fork] Tessera
     SDL_Event nextEvent;
     while (SDL_PeepEvents(&nextEvent, 1, SDL_GETEVENT, SDL_MOUSEMOTION, SDL_MOUSEMOTION) > 0) {
         event = &nextEvent.motion;
@@ -113,6 +116,7 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
             y = event->y;
             xrel += event->xrel;
             yrel += event->yrel;
+            windowId = event->windowID; // [fork] Tessera: the position is in this window
         }
     }
 
@@ -120,15 +124,20 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
     event = nullptr;
 
     if (m_AbsoluteMouseMode) {
+        // [fork] Tessera: in a multi-display session the window under the mouse picks the stream
+        SDL_Window* window;
+        int stream, streamWidth, streamHeight;
+        getTesseraMouseTarget(windowId, window, stream, streamWidth, streamHeight);
+
         int windowWidth, windowHeight;
-        SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
+        SDL_GetWindowSize(window, &windowWidth, &windowHeight); // [fork] Tessera: window
 
         SDL_Rect src, dst;
         bool mouseInVideoRegion;
 
         src.x = src.y = 0;
-        src.w = m_StreamWidth;
-        src.h = m_StreamHeight;
+        src.w = streamWidth; // [fork] Tessera
+        src.h = streamHeight; // [fork] Tessera
 
         dst.x = dst.y = 0;
         dst.w = windowWidth;
@@ -137,7 +146,7 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
         // Use the stream and window sizes to determine the video region
         StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
 
-        mouseInVideoRegion = isMouseInVideoRegion(x, y, windowWidth, windowHeight);
+        mouseInVideoRegion = isMouseInVideoRegion(x, y, windowWidth, windowHeight, windowId); // [fork] Tessera: windowId
 
         // Clamp motion to the video region
         x = qMin(qMax(x - dst.x, 0), dst.w);
@@ -158,7 +167,8 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
             }
         }
         if (mouseInVideoRegion || m_MouseWasInVideoRegion || m_PendingMouseButtonsAllUpOnVideoRegionLeave) {
-            LiSendMousePositionEvent((short)x, (short)y, dst.w, dst.h);
+            // [fork] Tessera: on that stream's display (stream 0 is LiSendMousePositionEvent())
+            LiTesseraSendMousePosition(stream, (short)x, (short)y, dst.w, dst.h);
         }
 
         // Adjust the cursor visibility if applicable
@@ -192,7 +202,7 @@ void SdlInputHandler::handleMouseWheelEvent(SDL_MouseWheelEvent* event)
     if (m_AbsoluteMouseMode) {
         int mouseX, mouseY;
         SDL_GetMouseState(&mouseX, &mouseY);
-        if (!isMouseInVideoRegion(mouseX, mouseY)) {
+        if (!isMouseInVideoRegion(mouseX, mouseY, -1, -1, event->windowID)) { // [fork] Tessera: windowID
             // Ignore scroll events outside the video region
             return;
         }
@@ -259,17 +269,23 @@ void SdlInputHandler::handleMouseWheelEvent(SDL_MouseWheelEvent* event)
 #endif
 }
 
-bool SdlInputHandler::isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth, int windowHeight)
+bool SdlInputHandler::isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth, int windowHeight,
+                                           Uint32 windowId) // [fork] Tessera
 {
     SDL_Rect src, dst;
 
+    // [fork] Tessera: in a multi-display session the window picks the stream
+    SDL_Window* window;
+    int stream, streamWidth, streamHeight;
+    getTesseraMouseTarget(windowId, window, stream, streamWidth, streamHeight);
+
     if (windowWidth < 0 || windowHeight < 0) {
-        SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
+        SDL_GetWindowSize(window, &windowWidth, &windowHeight); // [fork] Tessera: window
     }
 
     src.x = src.y = 0;
-    src.w = m_StreamWidth;
-    src.h = m_StreamHeight;
+    src.w = streamWidth; // [fork] Tessera
+    src.h = streamHeight; // [fork] Tessera
 
     dst.x = dst.y = 0;
     dst.w = windowWidth;

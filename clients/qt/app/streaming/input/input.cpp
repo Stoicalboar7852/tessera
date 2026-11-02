@@ -301,9 +301,12 @@ bool SdlInputHandler::isCaptureActive()
 
 void SdlInputHandler::updateKeyboardGrabState()
 {
+    // [fork] Tessera: in a multi-display session the grab goes to the focused display's window
+    SDL_Window* grabWindow = getTesseraWindow(SDL_GetKeyboardFocus());
+
     bool shouldGrab = m_CaptureSystemKeysMode != StreamingPreferences::CSK_OFF && isCaptureActive();
     if (shouldGrab) {
-        Uint32 windowFlags = SDL_GetWindowFlags(m_Window);
+        Uint32 windowFlags = SDL_GetWindowFlags(grabWindow); // [fork] Tessera: grabWindow
         if (m_CaptureSystemKeysMode == StreamingPreferences::CSK_FULLSCREEN &&
             !(windowFlags & SDL_WINDOW_FULLSCREEN)) {
             // Ungrab if it's fullscreen only and we left fullscreen
@@ -317,7 +320,7 @@ void SdlInputHandler::updateKeyboardGrabState()
 #if SDL_VERSION_ATLEAST(2, 0, 15)
     // On SDL 2.0.15+, we can get keyboard-only grab on Win32, X11, and Wayland.
     // SDL 2.0.18 adds keyboard grab on macOS (if built with non-AppStore APIs).
-    SDL_SetWindowKeyboardGrab(m_Window, shouldGrab ? SDL_TRUE : SDL_FALSE);
+    SDL_SetWindowKeyboardGrab(grabWindow, shouldGrab ? SDL_TRUE : SDL_FALSE); // [fork] Tessera: grabWindow
 #endif
 
     m_KeyboardCaptureActive = shouldGrab;
@@ -337,7 +340,8 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
     // always set when capture "fails" on SDL3, even though the user may have
     // configured the compositor to pass through system keys to us anyway.
     // See issues #1776 and #1900 for details.
-    Uint32 windowFlags = SDL_GetWindowFlags(m_Window);
+    // [fork] Tessera: any of a multi-display session's windows may have the focus
+    Uint32 windowFlags = SDL_GetWindowFlags(getTesseraWindow(SDL_GetKeyboardFocus()));
     if (!(windowFlags & SDL_WINDOW_INPUT_FOCUS) || !m_KeyboardCaptureActive) {
         return false;
     }
@@ -369,17 +373,20 @@ void SdlInputHandler::setCaptureActive(bool active)
             // the new position of the mouse when outside the window.
             SDL_GetGlobalMouseState(&mouseX, &mouseY);
 
+            // [fork] Tessera: in a multi-display session, the display window under the mouse
+            SDL_Window* mouseWindow = getTesseraWindow(SDL_GetMouseFocus());
+
             // Convert global mouse state to window-relative
-            SDL_GetWindowPosition(m_Window, &windowX, &windowY);
+            SDL_GetWindowPosition(mouseWindow, &windowX, &windowY); // [fork] Tessera: mouseWindow
             mouseX -= windowX;
             mouseY -= windowY;
 
-            if (isMouseInVideoRegion(mouseX, mouseY)) {
+            if (isMouseInVideoRegion(mouseX, mouseY, -1, -1, SDL_GetWindowID(mouseWindow))) { // [fork] Tessera
                 // Synthesize a mouse event to synchronize the cursor
                 SDL_MouseMotionEvent motionEvent = {};
                 motionEvent.type = SDL_MOUSEMOTION;
                 motionEvent.timestamp = SDL_GetTicks();
-                motionEvent.windowID = SDL_GetWindowID(m_Window);
+                motionEvent.windowID = SDL_GetWindowID(mouseWindow); // [fork] Tessera: mouseWindow
                 motionEvent.x = mouseX;
                 motionEvent.y = mouseY;
                 handleMouseMotionEvent(&motionEvent);

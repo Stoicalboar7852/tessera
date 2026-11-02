@@ -66,6 +66,10 @@ public:
     // The size of a stream's video, for mouse positions
     bool getStreamSize(int stream, int& width, int& height) const;
 
+    // For a mouse event in an extra stream's window: that window, its stream and the stream's size. Leaves the
+    // arguments alone (stream 0's) for any other window.
+    void getMouseTarget(Uint32 windowId, SDL_Window*& window, int& stream, int& streamWidth, int& streamHeight) const;
+
 private:
     struct StreamWindow {
         int stream = 0;

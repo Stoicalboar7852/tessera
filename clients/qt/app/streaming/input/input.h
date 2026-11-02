@@ -146,7 +146,8 @@ public:
 
     void setCaptureActive(bool active);
 
-    bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);
+    bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1,
+                              Uint32 windowId = 0); // [fork] Tessera: the window the position is in
 
     void updateKeyboardGrabState();
 
@@ -156,6 +157,12 @@ public:
     QString getUnmappedGamepads();
 
 private:
+    // [fork] Tessera (streaming/tessera/inputrouting.cpp): in a multi-display session, the window, stream and stream
+    // size for a mouse event's window, and which of the session's windows a focus or mouse window is. Without one,
+    // stream 0 and m_Window.
+    void getTesseraMouseTarget(Uint32 windowId, SDL_Window*& window, int& stream, int& streamWidth, int& streamHeight);
+    SDL_Window* getTesseraWindow(SDL_Window* candidate);
+
     enum KeyCombo {
         KeyComboQuit,
         KeyComboUngrabInput,

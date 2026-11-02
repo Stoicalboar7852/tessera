@@ -242,6 +242,9 @@ void MultiDisplay::createWindows(SDL_Surface* icon, bool fullScreen)
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Tessera: %d of %d displays are streaming",
                 streams, static_cast<int>(m_Plan.displays.size()));
 
+    // A click on another display's window reaches the host instead of only focusing the window (macOS)
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
+
     for (StreamWindow* streamWindow : std::as_const(m_Windows)) {
         StreamWindow& w = *streamWindow;
         if (w.stream >= streams) {
@@ -382,6 +385,12 @@ bool MultiDisplay::handleEvent(SDL_Event& event)
             return true;
         }
 
+        // The keyboard grab ("capture system keys") follows the focused window
+        if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && ownsWindow(windowId) &&
+                m_Session->m_InputHandler != nullptr) {
+            m_Session->m_InputHandler->updateKeyboardGrabState();
+        }
+
         StreamWindow* streamWindow = findWindow(windowId);
         if (streamWindow == nullptr) {
             // Focus moving from stream 0's window to another of ours is not a focus loss
@@ -468,6 +477,9 @@ void MultiDisplay::destroyWindows()
         m_StatusTimer = 0;
     }
 
+    // SDL's default again for later single-display sessions
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "0");
+
     for (StreamWindow* streamWindow : std::as_const(m_Windows)) {
         SDL_LockMutex(streamWindow->decoderLock);
         delete streamWindow->decoder;
@@ -510,6 +522,19 @@ bool MultiDisplay::getStreamSize(int stream, int& width, int& height) const
     width = streamWindow->width;
     height = streamWindow->height;
     return width > 0 && height > 0;
+}
+
+void MultiDisplay::getMouseTarget(Uint32 windowId, SDL_Window*& window, int& stream,
+                                  int& streamWidth, int& streamHeight) const
+{
+    const StreamWindow* streamWindow = findWindow(windowId);
+    if (streamWindow == nullptr || streamWindow->width <= 0 || streamWindow->height <= 0) {
+        return;
+    }
+    window = streamWindow->window;
+    stream = streamWindow->stream;
+    streamWidth = streamWindow->width;
+    streamHeight = streamWindow->height;
 }
 
 MultiDisplay::StreamWindow* MultiDisplay::findWindow(Uint32 windowId) const

@@ -247,6 +247,7 @@ HEADERS += \
 SOURCES += \
     streaming/tessera/displayplan.cpp \
     streaming/tessera/displayselection.cpp \
+    streaming/tessera/inputrouting.cpp \
     streaming/tessera/monitors.cpp \
     streaming/tessera/multidisplay.cpp \
     streaming/tessera/videostats.cpp
