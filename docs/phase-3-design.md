@@ -225,15 +225,22 @@ Also: `common-c/src/Tessera.h`, `TesseraControl.c`, `TesseraStreams.c` and tests
 
 - **CI:** common-c unit tests for the new calls; a QtTest target (layout normalization, display selection, stream 0
   choice, bitrate totals) built and run by `ci-client-qt.yml` on Windows and macOS; the Windows and macOS builds.
-- **Dev PC, unattended** (`Run-QtClientTest.ps1`, one elevated run like Phase 2's): the CI host and the CI Qt client
-  on the same PC, the client in windowed multi-display mode with input off (on one PC the host would move the same
-  cursor the client reads) and `tessera_make_primary` off (so Windows doesn't move the client's windows). Cases:
-  1–4 streams at 1080p60, mixed sizes, 120 Hz and 180 Hz, HDR if a display allows it, stock Sunshine fallback,
-  host-limit, and a stream stopped by the host. Checks: each stream's decoded and rendered fps and decode errors from
-  the client log, and the host's capture statistics.
-- **Manual acceptance** on the Windows laptop and the MacBook Pro, each with an external monitor, following
-  `docs/tests/phase-3-acceptance.md`; a script collects the client logs. The Windows laptop run also gives the LAN
-  latency numbers Phase 2 couldn't measure (design decision 5).
+- **Dev PC, unattended** (`Run-QtClientTest.ps1`, one elevated run like Phase 2's): the CI host and the local Qt
+  client build on the same PC. The client's extra monitors are virtual displays held by `vdd-stress` ("stand-ins"),
+  the client streams all displays, windowed, with `tessera_make_primary` off (so Windows doesn't move the client's
+  windows). Cases: one display, 2–4 streams at 1080p60, mixed sizes, 120, 144 and 180 Hz, borderless fullscreen, a
+  stand-in unplugged mid-session, multi-display not permitted, host-limit, stock Sunshine. Checks: the streams the
+  host accepted, each stream's received and rendered fps against its content and refresh rate, network and pacer
+  drops, where each window is, the client quitting cleanly, and the host's capture statistics. The mouse checks use
+  absolute mode and move the cursor themselves: on one PC the host moves the same cursor, so the harness looks for
+  the cursor landing at the matching point of the stream's host display. Relative mode, focus and keyboard need the
+  client machines. A stream stopped by the host has no trigger on one PC and is left to the client machines' logs.
+  Not elevated, the run does the one-display and stock Sunshine cases only (a smoke test).
+- **Manual acceptance** on the Windows laptop (Wi-Fi) and the MacBook Pro (gigabit Ethernet), each with an external
+  monitor, following `docs/tests/phase-3-acceptance.md`, with the host from `tools/tests/Start-LanTestHost.ps1`
+  (elevated: driver, firewall rules for the local subnet, pairing prompt, clean-up) and the logs from
+  `tools/tests/Collect-ClientLogs.ps1` / `.sh`. The Mac on Ethernet also gives the wired LAN latency numbers Phase 2
+  couldn't measure (design decision 5); the laptop gives Wi-Fi numbers.
 
 ## Build and iteration
 
