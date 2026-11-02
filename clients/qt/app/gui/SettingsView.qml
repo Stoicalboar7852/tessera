@@ -874,6 +874,9 @@ Flickable {
             }
         }
 
+        // [fork] Tessera: multi-display settings
+        TesseraDisplays {}
+
         GroupBox {
 
             id: audioSettingsGroupBox

@@ -95,13 +95,16 @@ size to save encoder and network load; the client then upscales.
 
 ### 4. Choosing displays: `app/streaming/tessera/displayselection.{h,cpp}` + settings
 
-New preferences, stored like the others in `StreamingPreferences`:
-- `tesseraDisplays`: `This display` (default, upstream behaviour) / `All displays` / `Chosen displays`;
-- `tesseraChosenMonitors`: the keys of the chosen monitors;
-- `tesseraDisplayResolution`: `Native` / `Desktop size`.
+New preferences, in the same settings store as upstream's but under their own keys (`tessera/displays`,
+`tessera/chosenDisplays`, `tessera/displayResolution`, read and written by `tessera::DisplaySettings`, so
+`StreamingPreferences` stays unchanged):
+- displays: `This display` (default, upstream behaviour) / `All displays` / `Chosen displays`;
+- chosen displays: the keys of the chosen monitors;
+- display resolution: `Native` / `Desktop size`.
 
-The settings page gets a "Displays" section (a new QML file included from `SettingsView.qml`) with the list of
-monitors (name, resolution, refresh, HDR) and checkboxes. It is hidden when the client has one monitor.
+The settings page gets a "Displays" section (`gui/TesseraDisplays.qml`, included from `SettingsView.qml`, backed by
+the QML singleton `TesseraDisplaySettings`) with the list of monitors (name, resolution, refresh, HDR) and
+checkboxes. It is hidden when the client has one monitor.
 
 **Stream 0** is the OS primary if it is chosen, else the monitor showing the Moonlight window. The host makes it the
 Windows primary, so the taskbar and new windows land where the user expects.
@@ -199,14 +202,15 @@ host option is small.
 ## Files to touch
 
 New (Tessera only): `clients/qt/app/streaming/tessera/` (`monitors*`, `displayselection*`, `multidisplay*`,
-`streamwindow*`, `layout.h`), `clients/qt/app/gui/TesseraDisplays.qml`, `clients/qt/tests/tessera/` (QtTest for
-layout and selection), `docs/adr/0008-clients-use-common-c.md`, `docs/tests/phase-3-acceptance.md`,
-`tools/tests/Run-QtClientTest.ps1`, `tools/tests/Collect-ClientLogs.ps1` / `.sh`.
+`streamwindow*`, `displayplan.{h,cpp}` for the layout and stream order), `clients/qt/app/gui/TesseraDisplays.qml`,
+`clients/qt/tests/tessera/` (QtTest for layout and selection), `docs/adr/0008-clients-use-common-c.md`,
+`docs/tests/phase-3-acceptance.md`, `tools/tests/Run-QtClientTest.ps1`, `tools/tests/Collect-ClientLogs.ps1` / `.sh`.
 
-Changed, marked `[fork] Tessera` (upstream files): `moonlight-common-c.pro`, `app/app.pro`, `streaming/session.{h,cpp}`
-(configure, create and route extra windows, focus check, teardown), `backend/nvhttp.{h,cpp}` (launch arguments and
-reply), `video/ffmpeg.{h,cpp}` (stream index), `ffmpeg-renderers/pacer/pacer.cpp` (event data), `input/{input.h,
-input.cpp,mouse.cpp}`, `settings/streamingpreferences.{h,cpp}`, `gui/SettingsView.qml` (include the section).
+Changed, marked `[fork] Tessera` (upstream files): `moonlight-common-c.pro`, `app/app.pro`, `app/main.cpp` (register
+the settings singleton), `app/qml.qrc`, `streaming/session.{h,cpp}` (configure, create and route extra windows, focus
+check, teardown), `backend/nvhttp.{h,cpp}` (launch arguments and reply), `video/ffmpeg.{h,cpp}` (stream index),
+`ffmpeg-renderers/pacer/pacer.cpp` (event data), `input/{input.h,input.cpp,mouse.cpp}`, `gui/SettingsView.qml`
+(include the section).
 Estimate: 250–350 marked lines, most in `session.cpp` and `mouse.cpp`.
 
 Also: `common-c/src/Tessera.h`, `TesseraControl.c`, `TesseraStreams.c` and tests; `.github/workflows/ci-client-qt.yml`;

@@ -243,6 +243,23 @@ HEADERS += \
     streaming/video/overlaymanager.h \
     backend/systemproperties.h
 
+# [fork] Tessera: multi-display streaming (docs/phase-3-design.md)
+SOURCES += \
+    streaming/tessera/displayplan.cpp \
+    streaming/tessera/displayselection.cpp \
+    streaming/tessera/monitors.cpp
+HEADERS += \
+    streaming/tessera/displayplan.h \
+    streaming/tessera/displayselection.h \
+    streaming/tessera/monitors.h
+win32 {
+    SOURCES += streaming/tessera/monitors_win.cpp
+}
+macx {
+    SOURCES += streaming/tessera/monitors_mac.mm
+    LIBS += -framework ApplicationServices
+}
+
 # Platform-specific renderers and decoders
 ffmpeg {
     message(FFmpeg decoder selected)

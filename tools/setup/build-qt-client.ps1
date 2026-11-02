@@ -11,15 +11,18 @@
     - deps: clients\qt\setup-deps.ps1
   The EWDK's build environment sets INCLUDE and LIB for MSVC only, so this adds the Windows SDK paths.
   Output: T:\build\qt-client (objects) and T:\build\qt-client-<config> (Moonlight.exe with its DLLs and portable.dat).
+  -Tests builds and runs the Tessera unit tests (clients\qt\tests\tessera) in T:\build\qt-client-tests instead.
 
 .EXAMPLE
   .\tools\setup\build-qt-client.ps1
   .\tools\setup\build-qt-client.ps1 -Config debug -Reconfigure
+  .\tools\setup\build-qt-client.ps1 -Tests
 #>
 param(
     [ValidateSet('release', 'debug')] [string]$Config = 'release',
     [switch]$Reconfigure,
-    [switch]$NoDeploy
+    [switch]$NoDeploy,
+    [switch]$Tests
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\env.ps1" | Out-Null
@@ -27,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 $qt = 'T:\toolchain\qt\6.12.0\msvc2022_64'
 $jom = 'T:\toolchain\jom'
 $source = 'T:\src\clients\qt'
-$build = 'T:\build\qt-client'
+$build = if ($Tests) { 'T:\build\qt-client-tests' } else { 'T:\build\qt-client' }
 $deploy = "T:\build\qt-client-$Config"
 foreach ($required in "$qt\bin\qmake.exe", "$jom\jom.exe", "$source\libs\windows\lib\x64\SDL2.dll") {
     if (-not (Test-Path $required)) { throw "missing $required (see the one-time setup in this script's help)" }
@@ -38,12 +41,16 @@ if ($Reconfigure -and (Test-Path "$build\Makefile")) { Remove-Item "$build\Makef
 # A batch file, so the EWDK's variables are expanded after SetupBuildEnv has set them
 $sdk = '%WindowsSdkDir%Include\%Version_Number%'
 $sdkLib = '%WindowsSdkDir%Lib\%Version_Number%'
-$batch = @"
-@echo off
-set "INCLUDE=%INCLUDE%;$sdk\ucrt;$sdk\um;$sdk\shared;$sdk\winrt;$sdk\cppwinrt"
-set "LIB=%LIB%;$sdkLib\ucrt\x64;$sdkLib\um\x64"
-set "PATH=$qt\bin;$jom;%PATH%"
-cd /d $build
+if ($Tests) {
+    $steps = @"
+if not exist Makefile (
+    qmake.exe $source\tests\tessera\tessera-tests.pro "CONFIG+=$Config" "CONFIG-=debug_and_release" || exit /b 1
+)
+jom.exe || exit /b 1
+"@
+}
+else {
+    $steps = @"
 if not exist Makefile (
     qmake.exe $source\moonlight-qt.pro || exit /b 1
 )
@@ -51,11 +58,29 @@ jom.exe $Config || exit /b 1
 if not exist "$deploy" mkdir "$deploy"
 copy /y "%VCToolsRedistDir%x64\Microsoft.VC145.CRT\*.dll" "$deploy" >nul || exit /b 1
 "@
+}
+$batch = @"
+@echo off
+set "INCLUDE=%INCLUDE%;$sdk\ucrt;$sdk\um;$sdk\shared;$sdk\winrt;$sdk\cppwinrt"
+set "LIB=%LIB%;$sdkLib\ucrt\x64;$sdkLib\um\x64"
+set "PATH=$qt\bin;$jom;%PATH%"
+cd /d $build
+$steps
+"@
 Set-Content -Path "$build\build.cmd" -Value $batch -Encoding ascii
 & "$PSScriptRoot\ewdk.ps1" "call `"$build\build.cmd`" > `"$build\build.log`" 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Get-Content "$build\build.log" | Select-String -Pattern ': (fatal )?error ' | Select-Object -First 30 | ForEach-Object { $_.Line }
     throw "build failed ($LASTEXITCODE), see $build\build.log"
+}
+if ($Tests) {
+    $env:PATH = "$qt\bin;$source\libs\windows\lib\x64;$env:PATH"
+    # QtTest's own output doesn't reach a PowerShell pipe, so it goes to a file; SDL's log on stderr is dropped
+    cmd /c "`"$build\tessera-tests.exe`" -o `"$build\results.txt,txt`" 2>nul"
+    $exitCode = $LASTEXITCODE
+    Get-Content "$build\results.txt"
+    if ($exitCode -ne 0) { throw "tests failed ($exitCode)" }
+    return
 }
 if ($NoDeploy) { return }
 
