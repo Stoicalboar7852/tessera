@@ -78,6 +78,12 @@ void LiTesseraWakeWaitForVideoFrame(int stream);
 void LiTesseraCompleteVideoFrame(int stream, VIDEO_FRAME_HANDLE handle, int drStatus);
 const RTP_VIDEO_STATS* LiTesseraGetRTPVideoStats(int stream);
 
+// Per-stream versions of LiRequestIdrFrame(), LiGetCurrentHostDisplayHdrMode() and LiGetHdrMetadata() (stream 0
+// included). The HDR metadata is what the host last sent with that stream's HDR mode.
+void LiTesseraRequestIdrFrame(int stream);
+bool LiTesseraGetCurrentHostDisplayHdrMode(int stream);
+bool LiTesseraGetHdrMetadata(int stream, PSS_HDR_METADATA metadata);
+
 // Absolute mouse position on one stream's display: x and y in 0 .. referenceWidth/Height-1, where the reference is
 // the client's view of that stream. With a single stream this is LiSendMousePositionEvent().
 int LiTesseraSendMousePosition(int stream, short x, short y, short referenceWidth, short referenceHeight);

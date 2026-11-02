@@ -489,6 +489,33 @@ const RTP_VIDEO_STATS* LiTesseraGetRTPVideoStats(int stream) {
     return isExtraStream(stream) ? videoOps[stream]->getRtpStats() : NULL;
 }
 
+void LiTesseraRequestIdrFrame(int stream) {
+    if (stream == 0) {
+        LiRequestIdrFrame();
+    }
+    else if (isExtraStream(stream)) {
+        tesseraRequestIdrFrame(stream);
+    }
+}
+
+bool LiTesseraGetCurrentHostDisplayHdrMode(int stream) {
+    if (stream == 0) {
+        return LiGetCurrentHostDisplayHdrMode();
+    }
+    return isExtraStream(stream) && TesseraStreams[stream].hostHdrMode;
+}
+
+bool LiTesseraGetHdrMetadata(int stream, PSS_HDR_METADATA metadata) {
+    if (stream == 0) {
+        return LiGetHdrMetadata(metadata);
+    }
+    if (!isExtraStream(stream) || !TesseraStreams[stream].hostHdrMode) {
+        return false;
+    }
+    *metadata = TesseraStreams[stream].hdrMetadata;
+    return true;
+}
+
 bool tesseraIsReferenceFrameInvalidationEnabled(int stream) {
     return ReferenceFrameInvalidationSupported && decoderSupportsRfi(&TesseraStreams[stream]);
 }
@@ -507,10 +534,11 @@ void tesseraReportHostStreamStatus(int stream, int state, int reason) {
     reportStatus(stream, state, reason);
 }
 
-void tesseraSetHostHdrMode(int stream, bool enabled) {
+void tesseraSetHostHdrMode(int stream, bool enabled, const SS_HDR_METADATA* metadata) {
     if (!isExtraStream(stream)) {
         return;
     }
+    TesseraStreams[stream].hdrMetadata = *metadata;
     TesseraStreams[stream].hostHdrMode = enabled;
     if (tesseraCallbacks.setHdrMode != NULL) {
         tesseraCallbacks.setHdrMode(stream, enabled);

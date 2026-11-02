@@ -23,6 +23,7 @@ typedef struct _TESSERA_STREAM_SLOT {
     bool started;
     volatile bool stopped;
     volatile bool hostHdrMode;
+    SS_HDR_METADATA hdrMetadata; // from the host's last HDR mode message for this stream
 } TESSERA_STREAM_SLOT, *PTESSERA_STREAM_SLOT;
 
 extern TESSERA_STREAM_SLOT TesseraStreams[TESSERA_MAX_STREAMS];
@@ -67,7 +68,7 @@ int tesseraQueueInputPacket(const void* packet, int length, uint8_t channelId); 
 
 // Between TesseraControl.c and TesseraStreams.c
 void tesseraReportHostStreamStatus(int stream, int state, int reason);
-void tesseraSetHostHdrMode(int stream, bool enabled);
+void tesseraSetHostHdrMode(int stream, bool enabled, const SS_HDR_METADATA* metadata);
 int tesseraGetStreamCountInternal(void);
 
 // What the copies of the video path call instead of the stream 0 functions (TesseraVideoInstance.h)

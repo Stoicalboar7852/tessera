@@ -52,9 +52,29 @@ void tesseraSendFrameFecStatus(int stream, PSS_FRAME_FEC_STATUS fecStatus) {}
 
 void tesseraHandleControlMessage(unsigned short type, const uint8_t* payload, int length) {
     if (type == TESSERA_CTRL_HDR_MODE) {
-        // tessera_ctrl_stream_t, then the legacy HDR mode payload: enabled byte + SS_HDR_METADATA (not used per stream yet)
+        // tessera_ctrl_stream_t, then the legacy HDR mode payload: enabled byte + SS_HDR_METADATA (little endian)
         if (length >= (int)sizeof(tessera_ctrl_stream_t) + 1) {
-            tesseraSetHostHdrMode(payload[0], payload[sizeof(tessera_ctrl_stream_t)] != 0);
+            const int offset = (int)sizeof(tessera_ctrl_stream_t);
+            SS_HDR_METADATA metadata;
+            BYTE_BUFFER bb;
+            uint8_t enabled;
+
+            memset(&metadata, 0, sizeof(metadata));
+            BbInitializeWrappedBuffer(&bb, (char*)payload, offset, length - offset, BYTE_ORDER_LITTLE);
+            BbGet8(&bb, &enabled);
+            // Fields a shorter message leaves out stay zero, as upstream does for older hosts
+            for (int i = 0; i < 3; i++) {
+                BbGet16(&bb, &metadata.displayPrimaries[i].x);
+                BbGet16(&bb, &metadata.displayPrimaries[i].y);
+            }
+            BbGet16(&bb, &metadata.whitePoint.x);
+            BbGet16(&bb, &metadata.whitePoint.y);
+            BbGet16(&bb, &metadata.maxDisplayLuminance);
+            BbGet16(&bb, &metadata.minDisplayLuminance);
+            BbGet16(&bb, &metadata.maxContentLightLevel);
+            BbGet16(&bb, &metadata.maxFrameAverageLightLevel);
+            BbGet16(&bb, &metadata.maxFullFrameLuminance);
+            tesseraSetHostHdrMode(payload[0], enabled != 0, &metadata);
         }
     }
     else if (type == TESSERA_CTRL_STREAM_STATUS) {

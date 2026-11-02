@@ -221,11 +221,90 @@ static void testNegotiatesStreamsFromDescribe(void) {
     LiTesseraReset();
 }
 
+static struct {
+    int calls;
+    int stream;
+    bool enabled;
+} hdrCallback;
+
+static void recordHdrMode(int stream, bool enabled) {
+    hdrCallback.calls++;
+    hdrCallback.stream = stream;
+    hdrCallback.enabled = enabled;
+}
+
+static void testKeepsHdrStatePerStream(void) {
+    TESSERA_DISPLAY displays[2];
+    TESSERA_CALLBACKS callbacks;
+    SS_HDR_METADATA metadata;
+    // tessera_ctrl_stream_t, enabled, then SS_HDR_METADATA's 13 little-endian 16-bit fields
+    uint8_t message[sizeof(tessera_ctrl_stream_t) + 1 + 26];
+
+    displays[0] = makeDisplay(1, 2560, 1440, 60, 1);
+    displays[1] = makeDisplay(2, 1920, 1080, 120, 1);
+    displays[1].x = 2560;
+    displays[1].hdr = true;
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.setHdrMode = recordHdrMode;
+    CHECK(LiTesseraConfigure(displays, 2, NULL, NULL, &callbacks) == 0);
+    EncryptionFeaturesSupported = SS_ENC_VIDEO;
+    tesseraParseDescribe("a=x-tessera.streams:2\r\n");
+    CHECK(LiTesseraGetStreamCount() == 2);
+    TesseraStreams[1].initialized = true; // as tesseraInitializeVideoStreams() leaves it, without starting a copy
+
+    CHECK(!LiTesseraGetCurrentHostDisplayHdrMode(1));
+    CHECK(!LiTesseraGetHdrMetadata(1, &metadata));
+
+    memset(message, 0, sizeof(message));
+    message[0] = 1;
+    message[sizeof(tessera_ctrl_stream_t)] = 1;
+    for (int i = 0; i < 13; i++) {
+        uint16_t value = (uint16_t)(1000 + i);
+
+        message[sizeof(tessera_ctrl_stream_t) + 1 + 2 * i] = (uint8_t)(value & 0xff);
+        message[sizeof(tessera_ctrl_stream_t) + 2 + 2 * i] = (uint8_t)(value >> 8);
+    }
+    memset(&hdrCallback, 0, sizeof(hdrCallback));
+    tesseraHandleControlMessage(TESSERA_CTRL_HDR_MODE, message, (int)sizeof(message));
+    CHECK(hdrCallback.calls == 1 && hdrCallback.stream == 1 && hdrCallback.enabled);
+    CHECK(LiTesseraGetCurrentHostDisplayHdrMode(1));
+    CHECK(LiTesseraGetHdrMetadata(1, &metadata));
+    CHECK(metadata.displayPrimaries[0].x == 1000);
+    CHECK(metadata.displayPrimaries[2].y == 1005);
+    CHECK(metadata.whitePoint.x == 1006 && metadata.whitePoint.y == 1007);
+    CHECK(metadata.maxDisplayLuminance == 1008);
+    CHECK(metadata.maxFullFrameLuminance == 1012);
+
+    // A message without metadata (an older layout) leaves the fields zero
+    tesseraHandleControlMessage(TESSERA_CTRL_HDR_MODE, message, (int)sizeof(tessera_ctrl_stream_t) + 1);
+    CHECK(LiTesseraGetHdrMetadata(1, &metadata));
+    CHECK(metadata.maxDisplayLuminance == 0);
+
+    // HDR off: no metadata
+    message[sizeof(tessera_ctrl_stream_t)] = 0;
+    tesseraHandleControlMessage(TESSERA_CTRL_HDR_MODE, message, (int)sizeof(message));
+    CHECK(hdrCallback.calls == 3 && !hdrCallback.enabled);
+    CHECK(!LiTesseraGetCurrentHostDisplayHdrMode(1));
+    CHECK(!LiTesseraGetHdrMetadata(1, &metadata));
+
+    // Streams the session doesn't have are ignored
+    message[0] = 2;
+    message[sizeof(tessera_ctrl_stream_t)] = 1;
+    tesseraHandleControlMessage(TESSERA_CTRL_HDR_MODE, message, (int)sizeof(message));
+    CHECK(hdrCallback.calls == 3);
+    CHECK(!LiTesseraGetCurrentHostDisplayHdrMode(2));
+    CHECK(!LiTesseraGetHdrMetadata(3, &metadata));
+    LiTesseraRequestIdrFrame(3); // no stream 3: nothing to send
+
+    LiTesseraReset();
+}
+
 int main(void) {
     testFormatsTheSharedTestVector();
     testRejectsInvalidDisplayLists();
     testSplitsTheBitrateByPixelRate();
     testNegotiatesStreamsFromDescribe();
+    testKeepsHdrStatePerStream();
 
     if (failures == 0) {
         printf("tessera_common_c_tests: all checks passed\n");
