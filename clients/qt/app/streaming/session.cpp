@@ -15,6 +15,10 @@
 #include "video/slvid.h"
 #endif
 
+#include "tessera/multidisplay.h" // [fork] Tessera
+#include "tessera/videostats.h" // [fork] Tessera
+#include <Tessera.h> // [fork] Tessera
+
 #ifdef Q_OS_WIN32
 // Scaling the icon down on Win32 looks dreadful, so render at lower res
 #define ICON_SIZE 32
@@ -278,7 +282,8 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
 bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             StreamingPreferences::RendererSelection renderer,
                             SDL_Window* window, int videoFormat, int width, int height,
-                            int frameRate, bool enableVsync, bool enableFramePacing, bool testOnly, IVideoDecoder*& chosenDecoder)
+                            int frameRate, bool enableVsync, bool enableFramePacing, bool testOnly, IVideoDecoder*& chosenDecoder,
+                            int tesseraStream) // [fork] Tessera
 {
     DECODER_PARAMETERS params;
 
@@ -297,6 +302,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.testOnly = testOnly;
     params.vds = vds;
     params.renderer = renderer;
+    params.tesseraStream = tesseraStream; // [fork] Tessera
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "V-sync %s",
@@ -593,12 +599,30 @@ Session::~Session()
     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
     // Use Session::exec() or DeferredSessionCleanupTask instead.
 
+    delete m_Tessera; // [fork] Tessera: normally gone already (DeferredSessionCleanupTask)
+
     SDL_DestroyMutex(m_DecoderLock);
 }
 
 bool Session::initialize(QQuickWindow* qtWindow)
 {
     m_QtWindow = qtWindow;
+
+    // [fork] Tessera: a multi-display session streams each chosen monitor at its own mode (docs/phase-3-design.md)
+    {
+        QPoint qtScreen;
+        if (m_QtWindow != nullptr && m_QtWindow->screen() != nullptr) {
+            qtScreen = m_QtWindow->screen()->geometry().topLeft();
+        }
+        const tessera::DisplayPlan plan = tessera::planDisplays(tessera::DisplaySettings::load(), tessera::enumerateMonitors(),
+                                                                qtScreen, m_Preferences->enableHdr);
+        for (const QString& warning : plan.warnings) {
+            emitLaunchWarning(warning);
+        }
+        if (plan.displays.size() > 1) {
+            m_Tessera = new tessera::MultiDisplay(this, plan);
+        }
+    }
 
 #ifdef Q_OS_DARWIN
     if (qEnvironmentVariableIntValue("I_WANT_BUGGY_FULLSCREEN") == 0) {
@@ -639,6 +663,11 @@ bool Session::initialize(QQuickWindow* qtWindow)
         // https://github.com/moonlight-stream/moonlight-qt/issues/1211
         // https://github.com/moonlight-stream/moonlight-qt/issues/1218
         SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, shouldUseFullScreenSpaces ? "1" : "0");
+
+        // [fork] Tessera: multi-display windows cover their monitors on the current Spaces
+        if (m_Tessera != nullptr) {
+            SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0");
+        }
     }
 #endif
 
@@ -680,6 +709,11 @@ bool Session::initialize(QQuickWindow* qtWindow)
 
     m_StreamConfig.fps = m_Preferences->fps;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
+
+    // [fork] Tessera: stream 0 runs at display 0's mode, and the bitrate covers every display
+    if (m_Tessera != nullptr) {
+        m_Tessera->prepareStreamConfiguration();
+    }
 
 #ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform
@@ -936,6 +970,11 @@ bool Session::initialize(QQuickWindow* qtWindow)
         m_FullScreenFlag = 0;
     }
 #endif
+
+    // [fork] Tessera: several windows can't each change their monitor's mode or hold exclusive fullscreen
+    if (m_Tessera != nullptr && m_FullScreenFlag == SDL_WINDOW_FULLSCREEN) {
+        m_FullScreenFlag = SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
 
     // Check for validation errors/warnings and emit
     // signals for them, if appropriate
@@ -1291,6 +1330,11 @@ private:
         // Finish cleanup of the connection state
         LiStopConnection();
 
+        // [fork] Tessera: the extra streams are gone with the connection
+        delete m_Session->m_Tessera;
+        m_Session->m_Tessera = nullptr;
+        LiTesseraReset();
+
         // Perform a best-effort app quit
         if (shouldQuit) {
             NvHTTP http(m_Session->m_Computer);
@@ -1323,6 +1367,10 @@ void Session::getWindowDimensions(int& x, int& y,
     if (m_Window != nullptr) {
         displayIndex = SDL_GetWindowDisplayIndex(m_Window);
         SDL_assert(displayIndex >= 0);
+    }
+    // [fork] Tessera: stream 0's window goes on display 0 of the plan
+    else if (m_Tessera != nullptr) {
+        displayIndex = m_Tessera->streamZeroDisplayIndex();
     }
     // Create our window on the same display that Qt's UI
     // was being displayed on.
@@ -1524,6 +1572,11 @@ void Session::toggleFullscreen()
     // Actually enter/leave fullscreen
     SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
 
+    // [fork] Tessera: the toggle applies to every display's window
+    if (m_Tessera != nullptr) {
+        m_Tessera->setFullScreen(fullScreen);
+    }
+
 #ifdef Q_OS_DARWIN
     // SDL on macOS has a bug that causes the window size to be reset to crazy
     // large dimensions when exiting out of true fullscreen mode. We can work
@@ -1609,6 +1662,10 @@ bool Session::startConnectionAsync()
 
     QString rtspSessionUrl;
 
+    // [fork] Tessera: ask a Tessera host for one stream per chosen display
+    const QString tesseraArguments = m_Tessera != nullptr ? m_Tessera->prepareLaunch(m_Computer) : QString();
+    QString tesseraResponse;
+
     try {
         NvHTTP http(m_Computer);
         http.startApp(m_Computer->currentGameId != 0 ? "resume" : "launch",
@@ -1618,13 +1675,19 @@ bool Session::startConnectionAsync()
                       m_Preferences->playAudioOnHost,
                       m_InputHandler->getAttachedGamepadMask(),
                       !m_Preferences->multiController,
-                      rtspSessionUrl);
+                      rtspSessionUrl,
+                      tesseraArguments, &tesseraResponse); // [fork] Tessera
     } catch (const GfeHttpResponseException& e) {
         emit displayLaunchError(tr("Host returned error: %1").arg(e.toQString()));
         return false;
     } catch (const QtNetworkReplyException& e) {
         emit displayLaunchError(e.toQString());
         return false;
+    }
+
+    // [fork] Tessera: how many streams the host accepted
+    if (m_Tessera != nullptr) {
+        m_Tessera->readLaunchResponse(tesseraResponse);
     }
 
     QByteArray hostnameStr = m_Computer->activeAddress.address().toUtf8();
@@ -1701,6 +1764,11 @@ bool Session::startConnectionAsync()
                                                                          m_StreamConfig.height,
                                                                          m_StreamConfig.fps,
                                                                          false);
+    }
+
+    // [fork] Tessera: set up the extra streams, or make sure none are left from an earlier session
+    if (m_Tessera == nullptr || !m_Tessera->configure(m_VideoCallbacks)) {
+        LiTesseraReset();
     }
 
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
@@ -1908,6 +1976,12 @@ void Session::exec()
         SDL_SetWindowFullscreen(m_Window, m_FullScreenFlag);
     }
 
+    // [fork] Tessera: a window for each extra display
+    tessera::resetVideoStats();
+    if (m_Tessera != nullptr) {
+        m_Tessera->createWindows(iconSurface, m_IsFullScreen);
+    }
+
     bool needsFirstEnterCapture = false;
     bool needsPostDecoderCreationCapture = false;
 
@@ -1995,6 +2069,11 @@ void Session::exec()
             continue;
         }
 #endif
+        // [fork] Tessera: events for the extra displays' windows and streams
+        if (m_Tessera != nullptr && m_Tessera->handleEvent(event)) {
+            continue;
+        }
+
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2328,6 +2407,11 @@ DispatchDeferredCleanup:
     // interfere with SDLGamepadKeyNavigation.
     delete m_InputHandler;
     m_InputHandler = nullptr;
+
+    // [fork] Tessera: the extra displays' decoders and windows go first
+    if (m_Tessera != nullptr) {
+        m_Tessera->destroyWindows();
+    }
 
     // Destroy the decoder, since this must be done on the main thread
     // NB: This must happen before LiStopConnection() for pull-based

@@ -170,7 +170,9 @@ public:
              bool localAudio,
              int gamepadMask,
              bool persistGameControllersOnDisconnect,
-             QString& rtspSessionUrl);
+             QString& rtspSessionUrl,
+             const QString& tesseraArguments = QString(), // [fork] Tessera: appended to the query
+             QString* tesseraResponse = nullptr); // [fork] Tessera: the reply XML
 
     QVector<NvApp>
     getAppList();

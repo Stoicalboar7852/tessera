@@ -45,6 +45,7 @@ typedef struct _DECODER_PARAMETERS {
     bool enableVsync;
     bool enableFramePacing;
     bool testOnly;
+    int tesseraStream; // [fork] Tessera: the multi-display stream this decoder shows (0 is upstream's only stream)
 } DECODER_PARAMETERS, *PDECODER_PARAMETERS;
 
 #define WINDOW_STATE_CHANGE_SIZE 0x01

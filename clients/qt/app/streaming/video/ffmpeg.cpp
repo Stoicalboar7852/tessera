@@ -2,6 +2,9 @@
 #include "ffmpeg.h"
 #include "utils.h"
 #include "streaming/session.h"
+#include "streaming/tessera/videostats.h" // [fork] Tessera
+
+#include <Tessera.h> // [fork] Tessera
 
 #include <h264_stream.h>
 
@@ -235,6 +238,7 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
       m_VideoFormat(0),
       m_NeedsSpsFixup(false),
       m_TestOnly(testOnly),
+      m_TesseraStream(0), // [fork] Tessera
       m_CurrentTestMode(TestMode::TestFrameOnly),
       m_DecoderThread(nullptr)
 {
@@ -269,7 +273,7 @@ void FFmpegVideoDecoder::reset()
     // It might be touching things we're about to free.
     if (m_DecoderThread != nullptr) {
         SDL_AtomicSet(&m_DecoderThreadShouldQuit, 1);
-        LiWakeWaitForVideoFrame();
+        LiTesseraWakeWaitForVideoFrame(m_TesseraStream); // [fork] Tessera
         SDL_WaitThread(m_DecoderThread, NULL);
         SDL_AtomicSet(&m_DecoderThreadShouldQuit, 0);
         m_DecoderThread = nullptr;
@@ -288,7 +292,8 @@ void FFmpegVideoDecoder::reset()
     // need to delete in the renderer destructor.
     avcodec_free_context(&m_VideoDecoderCtx);
 
-    if (m_CurrentTestMode != TestMode::TestFrameOnly) {
+    // [fork] Tessera: the overlay belongs to stream 0's window
+    if (m_CurrentTestMode != TestMode::TestFrameOnly && m_TesseraStream == 0) {
         Session::get()->getOverlayManager().setOverlayRenderer(nullptr);
     }
 
@@ -724,7 +729,9 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
         }
 
         // Tell overlay manager to use this frontend renderer
-        Session::get()->getOverlayManager().setOverlayRenderer(m_FrontendRenderer);
+        if (m_TesseraStream == 0) { // [fork] Tessera: the overlay belongs to stream 0's window
+            Session::get()->getOverlayManager().setOverlayRenderer(m_FrontendRenderer);
+        }
 
         // Allow the renderer to perform final preparations for rendering
         m_FrontendRenderer->prepareToRender();
@@ -830,7 +837,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         break;
 
     case VIDEO_FORMAT_H265_MAIN10:
-        if (LiGetCurrentHostDisplayHdrMode()) {
+        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
             codecString = "HEVC 10-bit HDR";
         }
         else {
@@ -839,7 +846,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         break;
 
     case VIDEO_FORMAT_H265_REXT10_444:
-        if (LiGetCurrentHostDisplayHdrMode()) {
+        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
             codecString = "HEVC 10-bit HDR 4:4:4";
         }
         else {
@@ -856,7 +863,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         break;
 
     case VIDEO_FORMAT_AV1_MAIN10:
-        if (LiGetCurrentHostDisplayHdrMode()) {
+        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
             codecString = "AV1 10-bit HDR";
         }
         else {
@@ -865,7 +872,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
         break;
 
     case VIDEO_FORMAT_AV1_HIGH10_444:
-        if (LiGetCurrentHostDisplayHdrMode()) {
+        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
             codecString = "AV1 10-bit HDR 4:4:4";
         }
         else {
@@ -1626,6 +1633,8 @@ bool FFmpegVideoDecoder::tryInitializeNonHwAccelDecoder(PDECODER_PARAMETERS para
 
 bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)
 {
+    m_TesseraStream = params->tesseraStream; // [fork] Tessera
+
     // Increase log level until the first frame is decoded
     av_log_set_level(AV_LOG_DEBUG);
 
@@ -1857,12 +1866,12 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             // Waiting for input. All output frames have been received.
             // Block until we receive a new frame from the host.
-            if (!LiWaitForNextVideoFrame(&handle, &du)) {
+            if (!LiTesseraWaitForNextVideoFrame(m_TesseraStream, &handle, &du)) { // [fork] Tessera
                 // This might be a signal from the main thread to exit
                 continue;
             }
 
-            LiCompleteVideoFrame(handle, submitDecodeUnit(du));
+            LiTesseraCompleteVideoFrame(m_TesseraStream, handle, submitDecodeUnit(du)); // [fork] Tessera
         }
 
         if (m_FramesIn != m_FramesOut) {
@@ -1890,7 +1899,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     // any metadata contained in the bitstream itself since that is guaranteed to be
                     // correctly synchronized to each frame, unlike our async HDR metadata message.
                     SS_HDR_METADATA hdrMetadata;
-                    if (LiGetHdrMetadata(&hdrMetadata)) {
+                    if (LiTesseraGetHdrMetadata(m_TesseraStream, &hdrMetadata)) { // [fork] Tessera
                         if (av_frame_get_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA) == nullptr) {
                             auto mdm = av_mastering_display_metadata_create_side_data(frame);
 
@@ -1972,7 +1981,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         }
 
                         // HDR forces BT.2020 regardless of decoder preference
-                        if (LiGetCurrentHostDisplayHdrMode()) {
+                        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
                             frame->colorspace = AVCOL_SPC_BT2020_NCL;
                         }
                     }
@@ -2009,7 +2018,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         }
 
                         // HDR forces SMPTE 2084 PQ regardless of decoder preference
-                        if (LiGetCurrentHostDisplayHdrMode()) {
+                        if (LiTesseraGetCurrentHostDisplayHdrMode(m_TesseraStream)) { // [fork] Tessera
                             frame->color_trc = AVCOL_TRC_SMPTE2084;
                         }
                     }
@@ -2047,9 +2056,9 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
                     // No output data, so let's try to submit more input data,
                     // while we're waiting for this to frame to come back.
-                    if (LiPollNextVideoFrame(&handle, &du)) {
+                    if (LiTesseraPollNextVideoFrame(m_TesseraStream, &handle, &du)) { // [fork] Tessera
                         // FIXME: Handle EAGAIN on avcodec_send_packet() properly?
-                        LiCompleteVideoFrame(handle, submitDecodeUnit(du));
+                        LiTesseraCompleteVideoFrame(m_TesseraStream, handle, submitDecodeUnit(du)); // [fork] Tessera
                     }
                     else {
                         // No output data or input data. Let's wait a little bit.
@@ -2081,7 +2090,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
                     // Just in case the error resulted in the loss of the frame,
                     // request an IDR frame to reset our decoder state.
-                    LiRequestIdrFrame();
+                    LiTesseraRequestIdrFrame(m_TesseraStream); // [fork] Tessera
                 }
             } while (err == AVERROR(EAGAIN) && !SDL_AtomicGet(&m_DecoderThreadShouldQuit));
 
@@ -2120,8 +2129,17 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
 
     // Flip stats windows roughly every second
     if (LiGetMicroseconds() > m_ActiveWndVideoStats.measurementStartUs + 1000000) {
+        // [fork] Tessera: every stream's statistics go to the log and to stream 0's overlay
+        {
+            VIDEO_STATS lastWndStats = {};
+            addVideoStats(m_ActiveWndVideoStats, lastWndStats);
+            tessera::reportVideoStats(m_TesseraStream, lastWndStats,
+                                      m_VideoDecoderCtx ? m_VideoDecoderCtx->width : 0,
+                                      m_VideoDecoderCtx ? m_VideoDecoderCtx->height : 0);
+        }
+
         // Update overlay stats if it's enabled
-        if (Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug)) {
+        if (m_TesseraStream == 0 && Session::get()->getOverlayManager().isOverlayEnabled(Overlay::OverlayDebug)) { // [fork] Tessera
             VIDEO_STATS lastTwoWndStats = {};
             addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
             addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
@@ -2129,6 +2147,8 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
             stringifyVideoStats(lastTwoWndStats,
                                 Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
                                 Session::get()->getOverlayManager().getOverlayMaxTextLength());
+            tessera::appendOverlayLines(Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug), // [fork] Tessera
+                                        Session::get()->getOverlayManager().getOverlayMaxTextLength());
             Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);
         }
 

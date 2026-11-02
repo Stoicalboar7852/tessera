@@ -247,11 +247,15 @@ HEADERS += \
 SOURCES += \
     streaming/tessera/displayplan.cpp \
     streaming/tessera/displayselection.cpp \
-    streaming/tessera/monitors.cpp
+    streaming/tessera/monitors.cpp \
+    streaming/tessera/multidisplay.cpp \
+    streaming/tessera/videostats.cpp
 HEADERS += \
     streaming/tessera/displayplan.h \
     streaming/tessera/displayselection.h \
-    streaming/tessera/monitors.h
+    streaming/tessera/monitors.h \
+    streaming/tessera/multidisplay.h \
+    streaming/tessera/videostats.h
 win32 {
     SOURCES += streaming/tessera/monitors_win.cpp
 }

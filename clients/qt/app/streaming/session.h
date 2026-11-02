@@ -11,6 +11,8 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 
+namespace tessera { class MultiDisplay; } // [fork] Tessera
+
 class SupportedVideoFormatList : public QList<int>
 {
 public:
@@ -96,6 +98,7 @@ class Session : public QObject
     friend class SdlInputHandler;
     friend class DeferredSessionCleanupTask;
     friend class AsyncConnectionStartThread;
+    friend class tessera::MultiDisplay; // [fork] Tessera
 
 public:
     explicit Session(NvComputer* computer, NvApp& app, StreamingPreferences *preferences = nullptr);
@@ -188,7 +191,8 @@ private:
                        SDL_Window* window, int videoFormat, int width, int height,
                        int frameRate, bool enableVsync, bool enableFramePacing,
                        bool testOnly,
-                       IVideoDecoder*& chosenDecoder);
+                       IVideoDecoder*& chosenDecoder,
+                       int tesseraStream = 0); // [fork] Tessera
 
     static
     void clStageStarting(int stage);
@@ -281,6 +285,8 @@ private:
     Uint32 m_DropAudioEndTime;
 
     Overlay::OverlayManager m_OverlayManager;
+
+    tessera::MultiDisplay* m_Tessera = nullptr; // [fork] Tessera: set for a multi-display session
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;

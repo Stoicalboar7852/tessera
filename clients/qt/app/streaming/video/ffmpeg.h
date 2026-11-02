@@ -129,6 +129,7 @@ private:
     int m_VideoFormat;
     bool m_NeedsSpsFixup;
     bool m_TestOnly;
+    int m_TesseraStream; // [fork] Tessera: DECODER_PARAMETERS::tesseraStream
     TestMode m_CurrentTestMode;
     SDL_Thread* m_DecoderThread;
     SDL_atomic_t m_DecoderThreadShouldQuit;

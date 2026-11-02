@@ -205,7 +205,9 @@ NvHTTP::startApp(QString verb,
                  bool localAudio,
                  int gamepadMask,
                  bool persistGameControllersOnDisconnect,
-                 QString& rtspSessionUrl)
+                 QString& rtspSessionUrl,
+                 const QString& tesseraArguments, // [fork] Tessera
+                 QString* tesseraResponse) // [fork] Tessera
 {
     int riKeyId;
 
@@ -234,7 +236,8 @@ NvHTTP::startApp(QString verb,
                                    "&remoteControllersBitmap="+QString::number(gamepadMask)+
                                    "&gcmap="+QString::number(gamepadMask)+
                                    "&gcpersist="+QString::number(persistGameControllersOnDisconnect ? 1 : 0)+
-                                   LiGetLaunchUrlQueryParameters(),
+                                   LiGetLaunchUrlQueryParameters()+
+                                   tesseraArguments, // [fork] Tessera
                                    LAUNCH_TIMEOUT_MS);
 
     qInfo() << "Launch response:" << response;
@@ -243,6 +246,11 @@ NvHTTP::startApp(QString verb,
     verifyResponseStatus(response);
 
     rtspSessionUrl = getXmlString(response, "sessionUrl0");
+
+    // [fork] Tessera
+    if (tesseraResponse != nullptr) {
+        *tesseraResponse = response;
+    }
 }
 
 void
