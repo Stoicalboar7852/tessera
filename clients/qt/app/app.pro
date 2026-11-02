@@ -495,8 +495,9 @@ win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../moonlight-common-c/
 else:win32:CONFIG(debug, debug|release): LIBS += -L$$OUT_PWD/../moonlight-common-c/debug/ -lmoonlight-common-c
 else:unix: LIBS += -L$$OUT_PWD/../moonlight-common-c/ -lmoonlight-common-c
 
-INCLUDEPATH += $$PWD/../moonlight-common-c/moonlight-common-c/src
-DEPENDPATH += $$PWD/../moonlight-common-c/moonlight-common-c/src
+# [fork] Tessera: the monorepo's common-c (ADR 0008)
+INCLUDEPATH += $$PWD/../../../common-c/src
+DEPENDPATH += $$PWD/../../../common-c/src
 
 win32:CONFIG(release, debug|release): LIBS += -L$$OUT_PWD/../qmdnsengine/release/ -lqmdnsengine
 else:win32:CONFIG(debug, debug|release): LIBS += -L$$OUT_PWD/../qmdnsengine/debug/ -lqmdnsengine

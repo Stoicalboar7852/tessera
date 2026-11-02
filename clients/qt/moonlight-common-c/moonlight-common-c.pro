@@ -38,7 +38,8 @@ unix:!macx {
     DEFINES += HAVE_CLOCK_GETTIME=1
 }
 
-COMMON_C_DIR = $$PWD/moonlight-common-c
+# [fork] Tessera: build the monorepo's common-c, which adds multistream (ADR 0008)
+COMMON_C_DIR = $$PWD/../../../common-c
 ENET_DIR = $$COMMON_C_DIR/enet
 SOURCES += \
     $$ENET_DIR/callbacks.c \
@@ -73,8 +74,22 @@ SOURCES += \
     $$COMMON_C_DIR/src/SimpleStun.c \
     $$COMMON_C_DIR/src/VideoDepacketizer.c \
     $$COMMON_C_DIR/src/VideoStream.c
+# [fork] Tessera: multistream sources (each numbered file is a copy of the upstream video path)
+SOURCES += \
+    $$COMMON_C_DIR/src/TesseraControl.c \
+    $$COMMON_C_DIR/src/TesseraStreams.c \
+    $$COMMON_C_DIR/src/TesseraRtpVideoQueue1.c \
+    $$COMMON_C_DIR/src/TesseraRtpVideoQueue2.c \
+    $$COMMON_C_DIR/src/TesseraRtpVideoQueue3.c \
+    $$COMMON_C_DIR/src/TesseraVideoDepacketizer1.c \
+    $$COMMON_C_DIR/src/TesseraVideoDepacketizer2.c \
+    $$COMMON_C_DIR/src/TesseraVideoDepacketizer3.c \
+    $$COMMON_C_DIR/src/TesseraVideoStream1.c \
+    $$COMMON_C_DIR/src/TesseraVideoStream2.c \
+    $$COMMON_C_DIR/src/TesseraVideoStream3.c
 HEADERS += \
-    $$COMMON_C_DIR/src/Limelight.h
+    $$COMMON_C_DIR/src/Limelight.h \
+    $$COMMON_C_DIR/src/Tessera.h
 INCLUDEPATH += \
     $$ENET_DIR/include \
     $$COMMON_C_DIR/src \

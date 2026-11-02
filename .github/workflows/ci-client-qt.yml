@@ -10,11 +10,15 @@ on:
     branches: [main]
     paths:
       - 'clients/qt/**'
+      - 'common-c/**'
+      - 'protocol/**'
       - '.gitmodules'
       - '.github/workflows/ci-client-qt.yml'
   pull_request:
     paths:
       - 'clients/qt/**'
+      - 'common-c/**'
+      - 'protocol/**'
       - '.gitmodules'
       - '.github/workflows/ci-client-qt.yml'
   workflow_dispatch:
@@ -48,7 +52,8 @@ jobs:
       - name: Fetch submodules
         working-directory: .
         shell: bash
-        run: git submodule update --init --recursive --depth 1 -- clients/qt
+        # The client builds /common-c (ADR 0008), whose enet and nanors are submodules too
+        run: git submodule update --init --recursive --depth 1 -- clients/qt common-c
 
       - name: Download dependencies (Windows)
         if: runner.os == 'Windows'
