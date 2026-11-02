@@ -1,7 +1,7 @@
 # Phase 3 design: Qt client multi-monitor
 
-_Status: **proposed 2026-11-02**, waiting for approval. Builds on Phase 2 (`docs/phase-2-design.md`, ADR 0007,
-`protocol/multistream.md`)._
+_Status: **approved 2026-11-02** as written, with decisions 1–7 as recommended. Builds on Phase 2
+(`docs/phase-2-design.md`, ADR 0007, `protocol/multistream.md`); the build change is ADR 0008._
 
 ## Goal and acceptance (brief §8, F2)
 
