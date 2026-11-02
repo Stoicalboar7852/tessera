@@ -88,6 +88,31 @@ jobs:
         if: runner.os == 'macOS'
         run: bash scripts/generate-dmg.sh Release
 
+      # Tessera's multi-display unit tests (tests/tessera), against the dependencies the build fetched
+      - name: Tessera unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call scripts\find-vswhere.bat || exit /b 1
+          for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" x64
+          set "PATH=%QT_PATH%;%CD%\libs\windows\lib\x64;%PATH%"
+          mkdir build\tessera-tests
+          cd build\tessera-tests
+          qmake ..\..\tests\tessera\tessera-tests.pro "CONFIG+=release" "CONFIG-=debug_and_release" || exit /b 1
+          nmake /nologo || exit /b 1
+          tessera-tests.exe || exit /b 1
+        env:
+          QT_PATH: ${{ runner.workspace }}\Qt\${{ matrix.qt_version }}\msvc2022_64\bin
+
+      - name: Tessera unit tests (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p build/tessera-tests
+          cd build/tessera-tests
+          qmake ../../tests/tessera/tessera-tests.pro CONFIG+=release
+          make -j3
+          ./tessera-tests
+
       - name: Upload binaries (Windows x64)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
