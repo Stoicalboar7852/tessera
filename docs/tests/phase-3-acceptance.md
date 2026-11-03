@@ -24,7 +24,10 @@ Allow about an hour per client. Results go in the table at the end; the log coll
    It installs the virtual display driver, opens the host's ports to the local network only (the firewall rules are
    named "Tessera LAN test"), starts the Tessera host and shows the PC's network address, the web UI's address with a
    one-time user name and password, and a prompt for pairing PINs. Leave the window open during the tests.
-2. To end the tests, type `q` in that window (or press Ctrl+C). It stops the host, removes the driver and the firewall
+   If Windows asks whether to let `sunshine.exe` through the firewall, click Allow (Cancel would add a rule that blocks
+   it); the script removes that rule too at the end.
+2. The clients must be on the same network as the dev PC, not a guest Wi-Fi: the rules only accept the local subnet.
+3. To end the tests, type `q` in that window (or press Ctrl+C). It stops the host, removes the driver and the firewall
    rules, and checks that the display layout is as before.
 
 The host is the real thing here (unlike the dev-PC run): it makes stream 0's display its primary, so the taskbar and
@@ -40,8 +43,10 @@ new windows appear on the client's main monitor.
 3. Connect the external monitor and extend the desktop (Windows Settings > System > Display > "Extend these
    displays"). Note which one is the main display.
 4. Use 5 GHz Wi-Fi if the router has it, with the laptop near the router and on mains power.
-5. Start `Moonlight.exe`. The dev PC shows up by name; if it doesn't, use the + button and type the address the host
-   window shows. Click it, then type the PIN Moonlight shows into the host window.
+5. Start `Moonlight.exe`. The build isn't signed, so the first time Windows may say "Windows protected your PC": click
+   More info, then Run anyway. If Windows asks whether to let Moonlight through the firewall, click Allow. The dev PC
+   shows up by name; if it doesn't, use the + button and type the address the host window shows. Click it, then type
+   the PIN Moonlight shows into the host window.
 6. In Moonlight's settings, under **Displays**, choose **All displays**. Leave everything else at the defaults
    (automatic bitrate, V-Sync on, hardware decoding), with **Display mode: Fullscreen**.
 
@@ -61,6 +66,9 @@ new windows appear on the client's main monitor.
    ```
 
    It shares its settings and pairing with stock Moonlight, if that is installed; only the Displays choice is new.
+
+   The first time it starts, macOS asks whether Tessera Moonlight may find devices on local networks: click Allow.
+   Without it the app can't reach the PC (to change it later: System Settings > Privacy & Security > Local Network).
 4. Plug in the Ethernet adapter and turn Wi-Fi off for the tests, so the stream can only use the cable. In System
    Settings > Network > Ethernet > Details > Hardware, the speed should read 1000baseT.
 5. Built-in display: System Settings > Displays > Refresh rate **ProMotion**. External monitor: 144 Hz. Arrange the
@@ -147,12 +155,15 @@ Moonlight's behaviour: one window, no extra overlay lines.
 
 After the tests, on each client:
 
-- **Windows:** in PowerShell, `powershell -ExecutionPolicy Bypass -File Collect-ClientLogs.ps1 -MoonlightDir "<the
-  folder from step 2.1>"`. It writes `tessera-client-logs-<time>.zip` to the Desktop.
-- **Mac:** in Terminal, `bash Collect-ClientLogs.sh`. It writes the same zip to the Desktop.
+- **Windows:** save
+  https://raw.githubusercontent.com/Stoicalboar7852/tessera/main/tools/tests/Collect-ClientLogs.ps1 (right-click,
+  Save as), then in PowerShell, in the folder you saved it to, `powershell -ExecutionPolicy Bypass -File
+  Collect-ClientLogs.ps1 -MoonlightDir "<the folder from step 2.1>"`. It writes `tessera-client-logs-<time>.zip` to the
+  Desktop.
+- **Mac:** in Terminal, `curl -fsSLO https://raw.githubusercontent.com/Stoicalboar7852/tessera/main/tools/tests/Collect-ClientLogs.sh`
+  and then `bash Collect-ClientLogs.sh`. It writes the same zip to the Desktop.
 
-The scripts are in `tools/tests/` in the repository (https://github.com/Stoicalboar7852/tessera). They collect the
-newest Moonlight logs, the monitors, the GPU and the network link; nothing else. Copy the zips and the host window's
+The scripts collect the newest Moonlight logs, the monitors, the GPU and the network link; nothing else. Copy the zips and the host window's
 run folder (it prints it at the end) into `D:\Remote streaming\logs\phase3-acceptance\` on the dev PC.
 
 ## 6. Results

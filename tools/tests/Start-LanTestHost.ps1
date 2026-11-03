@@ -55,7 +55,14 @@ function Add-FirewallRules {
     New-NetFirewallRule @common -DisplayName "$RuleGroup (UDP)" -Protocol UDP -LocalPort 47998, 47999, 48000, 48002, 48010 | Out-Null
 }
 
-function Remove-FirewallRules { Get-NetFirewallRule -Group $RuleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
+function Remove-FirewallRules {
+    try {
+        Get-NetFirewallRule -Group $RuleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+        # And the rules Windows adds if it asked whether to let the staged host through and someone answered
+        $exe = Join-Path $Stage 'host\sunshine.exe'
+        Get-NetFirewallApplicationFilter | Where-Object { $_.Program -eq $exe } | Get-NetFirewallRule | Remove-NetFirewallRule
+    } catch { Log "could not remove every firewall rule: $_" }
+}
 
 # Waits for the pairing request Moonlight sent with this PIN and answers it
 function Complete-LanPairing([string]$pin, [string]$name) {
