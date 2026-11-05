@@ -34,6 +34,10 @@ typedef struct _TESSERA_DISPLAY {
     int dpi;
 
     bool hdr;
+
+    // The bitrate the client wants for this display in kbps, or 0 for a share by pixel rate. Not sent in the display
+    // list; LiTesseraSplitBitrate() uses it.
+    int bitrateKbps;
 } TESSERA_DISPLAY, *PTESSERA_DISPLAY;
 
 // Writes the display list for the launch request's "tmsd" argument (protocol/multistream.md section 2), NUL-terminated.
@@ -41,9 +45,9 @@ typedef struct _TESSERA_DISPLAY {
 // display is invalid, there are more than TESSERA_MAX_REQUESTED_DISPLAYS, or the result doesn't fit in outSize.
 int LiTesseraFormatDisplayList(const TESSERA_DISPLAY* displays, int count, char* out, size_t outSize);
 
-// Splits a total bitrate across the displays by pixel rate (width x height x refresh), giving each at least
-// TESSERA_MIN_STREAM_BITRATE_KBPS where the total allows. Rounding leftovers go to display 0. The results add up to
-// totalKbps.
+// Splits a total bitrate across the displays in proportion to their bitrateKbps if every display has one, else by
+// pixel rate (width x height x refresh), giving each at least TESSERA_MIN_STREAM_BITRATE_KBPS where the total allows.
+// Rounding leftovers go to display 0. The results add up to totalKbps.
 void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int count, int* outKbps);
 
 // Notifications about extra streams. They run on library threads and must not block.

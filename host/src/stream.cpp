@@ -611,6 +611,8 @@ namespace stream {
     safe::signal_t controlEnd;  ///< Signal raised when the control channel exits.
 
     std::atomic<session::state_e> state;  ///< Current lifecycle state observed by stream workers.
+
+    std::atomic_bool tessera_client_quit {false};  ///< [fork] Tessera: the client's disconnect carried TESSERA_DISCONNECT_QUIT.
   };
 
   /**
@@ -837,6 +839,8 @@ namespace stream {
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
+          // [fork] Tessera: a Tessera client whose user ended the stream says so; a timeout or other clients send 0
+          session->tessera_client_quit = event.data == TESSERA_DISCONNECT_QUIT;
           // No more clients to send video data to ^_^
           if (session->state == session::state_e::RUNNING) {
             session::stop(*session);
@@ -2443,6 +2447,9 @@ namespace stream {
         if (revert_display_config) {
           display_device::revert_configuration();
           tessera::host::revert_displays();  // [fork] Tessera
+        } else {
+          // [fork] Tessera: the app keeps running; its virtual displays go when the user ended the stream
+          tessera::host::release_displays(session.tessera_client_quit);
         }
 
         platf::streaming_will_stop();

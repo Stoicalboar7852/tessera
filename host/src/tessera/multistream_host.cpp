@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
+#include <cstdint>
 #include <format>
 #include <mutex>
 #include <tuple>
@@ -16,6 +18,7 @@
 #include "display_session.h"
 #include "multistream_host.h"
 #include "src/config.h"
+#include "src/globals.h"
 #include "src/logging.h"
 #include "src/rtsp.h"
 #include "src/stream.h"
@@ -46,9 +49,19 @@ namespace tessera::host {
       return static_cast<std::uint32_t>(std::clamp(config::tessera.max_streams, 1, TESSERA_MAX_STREAMS));
     }
 
-    /// The virtual displays of the running app (one session at a time until Phase 5).
+    /// How long the virtual displays stay after a lost connection, so the client can resume on them.
+    constexpr auto lost_connection_grace = 60s;
+
+    /**
+     * The virtual displays of the running app (one set at a time until Phase 5).
+     *
+     * Lock order: the RTSP server's session list, then display_session_mutex. rtsp_stream::session_count() ends
+     * stopped sessions, which release their displays, so it must not be called with display_session_mutex held.
+     */
     std::mutex display_session_mutex;
-    std::shared_ptr<display_session_t> active_display_session;
+    std::shared_ptr<display_session_t> active_display_session;  ///< Guarded by display_session_mutex.
+    /// Bumped whenever the displays are reused, replaced or removed, so a scheduled removal knows it is stale.
+    std::uint64_t display_generation = 0;  ///< Guarded by display_session_mutex.
 
     bool same_displays(const std::vector<multistream::client_display_t> &a, const std::vector<multistream::client_display_t> &b) {
       return std::ranges::equal(a, b, [](const multistream::client_display_t &x, const multistream::client_display_t &y) {
@@ -57,19 +70,60 @@ namespace tessera::host {
       });
     }
 
-    /**
-     * @brief One virtual display per client monitor (reused when the same client resumes with the same monitors).
-     * @return The display names in stream order, or the reason there are none.
-     */
-    std::variant<std::vector<std::string>, tessera_reason_e> virtual_displays(const rtsp_stream::launch_session_t &launch_session, const std::vector<multistream::client_display_t> &clients) {
-      std::lock_guard lock {display_session_mutex};
-      if (active_display_session && same_displays(active_display_session->clients(), clients)) {
-        BOOST_LOG(info) << "Multistream: reusing the virtual displays"sv;
-        return active_display_session->displays();
-      }
+    /// Removes the virtual displays. Requires display_session_mutex.
+    void revert_locked() {
+      ++display_generation;
       if (active_display_session) {
         active_display_session->revert();
         active_display_session.reset();
+      }
+    }
+
+    /**
+     * @brief Removes the virtual displays a lost connection left, unless a client streams again or they changed since.
+     * @param generation display_generation when the removal was scheduled.
+     */
+    void remove_unused_displays(std::uint64_t generation) {
+      if (rtsp_stream::session_count() > 0) {
+        return;  // The end of that session decides
+      }
+      std::lock_guard lock {display_session_mutex};
+      if (generation == display_generation && active_display_session) {
+        BOOST_LOG(info) << "Multistream: no client resumed; removing the virtual displays"sv;
+        revert_locked();
+      }
+    }
+
+    /**
+     * @brief The host displays for a launch, in stream order.
+     */
+    struct host_displays_t {
+      std::vector<std::string> names;  ///< \\.\DISPLAYn
+      bool shared = false;  ///< Another client's displays (TESSERA_REASON_SHARED).
+    };
+
+    /**
+     * @brief One virtual display per client monitor: reused when the same client resumes with the same monitors,
+     *        shared (unchanged) while another client streams them, otherwise created anew.
+     * @param others_streaming A streaming session is running (rtsp_stream::session_count(), read before the lock).
+     * @return The displays in stream order, or the reason there are none.
+     */
+    std::variant<host_displays_t, tessera_reason_e> virtual_displays(const rtsp_stream::launch_session_t &launch_session, const std::vector<multistream::client_display_t> &clients, bool others_streaming) {
+      std::lock_guard lock {display_session_mutex};
+      ++display_generation;  // A removal scheduled after a lost connection no longer applies
+      const bool exist = active_display_session != nullptr;
+      switch (multistream::choose_display_reuse(exist, exist && same_displays(active_display_session->clients(), clients), others_streaming)) {
+        case multistream::display_reuse_e::reuse:
+          BOOST_LOG(info) << "Multistream: reusing the virtual displays"sv;
+          return host_displays_t {active_display_session->displays(), false};
+        case multistream::display_reuse_e::share:
+          BOOST_LOG(info) << "Multistream: another client is streaming; sharing its "sv << active_display_session->displays().size() << " displays"sv;
+          return host_displays_t {active_display_session->displays(), true};
+        case multistream::display_reuse_e::replace:
+          revert_locked();
+          break;
+        case multistream::display_reuse_e::create:
+          break;
       }
 
       if (auto probe = vdd::vdd_client_t::open(); !probe) {
@@ -87,7 +141,7 @@ namespace tessera::host {
         return TESSERA_REASON_DISPLAY_FAILED;
       }
       active_display_session = std::move(session).value();
-      return active_display_session->displays();
+      return host_displays_t {active_display_session->displays(), false};
     }
 
     /**
@@ -200,12 +254,21 @@ namespace tessera::host {
       }
     } else {
       const std::vector<multistream::client_display_t> clients(requested->begin(), requested->begin() + decision.streams);
-      auto displays_or_reason = virtual_displays(launch_session, clients);
+      const bool others_streaming = rtsp_stream::session_count() > 0;  // Before the display lock (see its comment)
+      auto displays_or_reason = virtual_displays(launch_session, clients, others_streaming);
       if (const auto *reason = std::get_if<tessera_reason_e>(&displays_or_reason)) {
         single(*reason);
         return;
       }
-      host_displays = std::get<std::vector<std::string>>(std::move(displays_or_reason));
+      auto displays = std::get<host_displays_t>(std::move(displays_or_reason));
+      if (displays.shared) {
+        decision = multistream::share_displays(decision, displays.names.size());
+        if (decision.streams < 2) {
+          single(decision.reason);
+          return;
+        }
+      }
+      host_displays = std::move(displays.names);
     }
 
     for (std::uint32_t i = 0; i < decision.streams; ++i) {
@@ -232,9 +295,29 @@ namespace tessera::host {
 
   void revert_displays() {
     std::lock_guard lock {display_session_mutex};
-    if (active_display_session) {
-      active_display_session->revert();
-      active_display_session.reset();
+    revert_locked();
+  }
+
+  void release_displays(bool client_quit) {
+    std::lock_guard lock {display_session_mutex};
+    switch (multistream::choose_display_release(active_display_session != nullptr, client_quit)) {
+      case multistream::display_release_e::keep:
+        return;
+      case multistream::display_release_e::remove_now:
+        BOOST_LOG(info) << "Multistream: the client ended the stream; removing the virtual displays"sv;
+        revert_locked();
+        return;
+      case multistream::display_release_e::remove_later:
+        {
+          const auto generation = ++display_generation;
+          BOOST_LOG(info) << "Multistream: the client's connection was lost; keeping the virtual displays for "sv
+                          << std::chrono::duration_cast<std::chrono::seconds>(lost_connection_grace).count() << " s"sv;
+          auto task = [generation]() {
+            remove_unused_displays(generation);
+          };
+          task_pool.pushDelayed(task, lost_connection_grace);
+          return;
+        }
     }
   }
 

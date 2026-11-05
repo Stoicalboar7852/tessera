@@ -61,6 +61,7 @@ void tesseraStopVideoStreams(void);
 void tesseraDestroyVideoStreams(void);
 void tesseraHandleControlMessage(unsigned short type, const uint8_t* payload, int length); // ControlStream.c
 void tesseraFillMousePosition(NV_INPUT_HEADER* header); // InputStream.c, input thread, before sending
+uint32_t tesseraDisconnectData(void); // Misc.c: the ENet disconnect data when the client ends the stream
 
 // Provided by upstream files
 bool tesseraSendControlMessage(unsigned short type, const void* payload, int length, uint8_t channelId); // ControlStream.c

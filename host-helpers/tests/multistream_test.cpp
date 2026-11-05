@@ -117,7 +117,38 @@ TEST(Multistream, PlansStreamsWithinTheLimits) {
   EXPECT_EQ(plan_streams(4, {.encoder_max = 0}).streams, 1u);
 
   EXPECT_EQ(reason_token(TESSERA_REASON_ENCODER_LIMIT), "encoder-limit");
+  EXPECT_EQ(reason_token(TESSERA_REASON_SHARED), "shared-displays");
   EXPECT_EQ(reason_token(static_cast<tessera_reason_e>(15)), "unknown");
+}
+
+TEST(Multistream, ChoosesWhatHappensToExistingDisplays) {
+  EXPECT_EQ(choose_display_reuse(false, false, false), display_reuse_e::create);
+  EXPECT_EQ(choose_display_reuse(false, false, true), display_reuse_e::create);
+  EXPECT_EQ(choose_display_reuse(true, true, false), display_reuse_e::reuse);
+  EXPECT_EQ(choose_display_reuse(true, true, true), display_reuse_e::reuse);
+  // A second client doesn't change the displays the first one is streaming
+  EXPECT_EQ(choose_display_reuse(true, false, true), display_reuse_e::share);
+  EXPECT_EQ(choose_display_reuse(true, false, false), display_reuse_e::replace);
+}
+
+TEST(Multistream, SharesAtMostTheExistingDisplays) {
+  const auto fewer = share_displays({3, TESSERA_REASON_NONE}, 2);
+  EXPECT_EQ(fewer.streams, 2u);
+  EXPECT_EQ(fewer.reason, TESSERA_REASON_SHARED);
+
+  // Asking for fewer than exist: the first ones, still marked as shared
+  const auto subset = share_displays({2, TESSERA_REASON_ENCODER_LIMIT}, 4);
+  EXPECT_EQ(subset.streams, 2u);
+  EXPECT_EQ(subset.reason, TESSERA_REASON_SHARED);
+
+  EXPECT_EQ(share_displays({2, TESSERA_REASON_NONE}, 0).streams, 1u);
+}
+
+TEST(Multistream, ChoosesWhenToRemoveDisplays) {
+  EXPECT_EQ(choose_display_release(false, true), display_release_e::keep);
+  EXPECT_EQ(choose_display_release(false, false), display_release_e::keep);
+  EXPECT_EQ(choose_display_release(true, true), display_release_e::remove_now);
+  EXPECT_EQ(choose_display_release(true, false), display_release_e::remove_later);
 }
 
 TEST(Multistream, KeepsAConnectedClientLayout) {

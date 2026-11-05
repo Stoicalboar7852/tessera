@@ -107,6 +107,28 @@ static void testSplitsTheBitrateByPixelRate(void) {
     CHECK(kbps[0] == 668 && kbps[1] == 666 && kbps[2] == 666);
 }
 
+static void testSplitsTheBitrateByChosenBitrates(void) {
+    TESSERA_DISPLAY displays[2];
+    int kbps[2];
+
+    // Every display has a chosen bitrate: the total is shared in proportion to them, not to pixel rate.
+    displays[0] = makeDisplay(1, 1920, 1080, 60, 1);
+    displays[1] = makeDisplay(2, 3840, 2160, 60, 1);
+    displays[0].bitrateKbps = 30000;
+    displays[1].bitrateKbps = 10000;
+    LiTesseraSplitBitrate(40000, displays, 2, kbps);
+    CHECK(kbps[0] == 30000 && kbps[1] == 10000);
+
+    // A total below the sum keeps the proportion.
+    LiTesseraSplitBitrate(20000, displays, 2, kbps);
+    CHECK(kbps[0] == 15000 && kbps[1] == 5000);
+
+    // One display without a chosen bitrate: back to pixel rate for all.
+    displays[1].bitrateKbps = 0;
+    LiTesseraSplitBitrate(40000, displays, 2, kbps);
+    CHECK(kbps[0] == 8000 && kbps[1] == 32000);
+}
+
 // Collects SDP attributes from tesseraAddSdpAttributes()
 static struct {
     char names[64][64];
@@ -162,10 +184,15 @@ static void testNegotiatesStreamsFromDescribe(void) {
     tesseraParseDescribe("a=x-tessera.streams:4\r\n");
     CHECK(LiTesseraGetStreamCount() == 1);
 
+    // Ending a single-stream session disconnects as upstream does
+    CHECK(tesseraDisconnectData() == 0);
+
     // Two configured, four offered: two, stream 0 is encrypted too, and the bitrate is split
     configureTwoDisplays(false);
     tesseraParseDescribe("a=x-tessera.streams:4\r\n");
     CHECK(LiTesseraGetStreamCount() == 2);
+    // Ending a multistream session tells the host to remove its displays
+    CHECK(tesseraDisconnectData() == TESSERA_DISCONNECT_QUIT);
     CHECK((StreamConfig.encryptionFlags & ENCFLG_VIDEO) != 0);
     CHECK(tesseraStreamBitrateKbps(0) == TESSERA_TV_SPLIT_KBPS_0);
     CHECK(tesseraStreamBitrateKbps(1) == TESSERA_TV_SPLIT_KBPS_1);
@@ -303,6 +330,7 @@ int main(void) {
     testFormatsTheSharedTestVector();
     testRejectsInvalidDisplayLists();
     testSplitsTheBitrateByPixelRate();
+    testSplitsTheBitrateByChosenBitrates();
     testNegotiatesStreamsFromDescribe();
     testKeepsHdrStatePerStream();
 

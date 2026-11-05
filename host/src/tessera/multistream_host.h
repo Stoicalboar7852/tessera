@@ -59,6 +59,16 @@ namespace tessera::host {
   /// Removes the app's virtual displays and restores the host's topology (where Sunshine reverts its display setup).
   void revert_displays();
 
+  /**
+   * @brief The last streaming session ended while the app keeps running (where Sunshine keeps its display setup).
+   *
+   * Removes the virtual displays at once if the user ended the stream, or after a minute if the connection was lost
+   * and no client resumed on them. A client that resumes gets them again (or new ones for other monitors).
+   *
+   * @param client_quit The client's disconnect carried TESSERA_DISCONNECT_QUIT.
+   */
+  void release_displays(bool client_quit);
+
   /// Adds TesseraStreams / TesseraReason to the launch or resume reply, if the request had a display list.
   void add_launch_reply(const rtsp_stream::launch_session_t &launch_session, boost::property_tree::ptree &tree);
 

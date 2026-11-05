@@ -47,8 +47,8 @@ The host validates the whole list before it acts. If the list is invalid, the cl
 host can't create displays, the session runs with one stream (today's behaviour) and the reply says why.
 
 **Reply:** the launch/resume XML adds `TesseraStreams` (k, the streams this session will have, ≥ 1) and, when k is
-less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-limit`, `not-permitted`,
-`no-display-driver`, `display-failed`, `invalid-request`, `unsupported`).
+less than the list's length or the displays are shared, `TesseraReason` (a token: `host-limit`, `encoder-limit`,
+`not-permitted`, `no-display-driver`, `display-failed`, `invalid-request`, `unsupported`, `shared-displays`).
 
 **Host behaviour:**
 - One virtual display per accepted entry, added in one request.
@@ -57,6 +57,15 @@ less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-li
 - The displays are arranged like the client's layout, to the right of the host's existing desktop, with entry 0 as
   the primary. If the client's rectangles overlap or don't touch, they are placed left to right by x instead, top
   edges aligned.
+- The host keeps one set of virtual displays at a time. A later launch or resume with a display list:
+  - **reuses** them if they were made for the same monitors and modes;
+  - **shares** them, unchanged, while another session is streaming. Display i serves stream i, for at most as many
+    streams as there are displays, and the reply carries `shared-displays` even when every requested stream runs.
+    Giving each client its own displays is planned (Phase 5);
+  - otherwise **replaces** them.
+- When the last stream ends and the app keeps running, the displays are removed at once if the client ended the
+  stream (section 7). If the connection was lost, they are removed after 60 seconds unless a client streams again.
+  They are also removed when the app exits or the session is cancelled.
 
 ## 3. RTSP
 
@@ -73,8 +82,10 @@ less than the list's length, `TesseraReason` (a token: `host-limit`, `encoder-li
   - **Format:** the negotiated codec for every stream, 10-bit only for streams whose display is HDR
     (`dynamicRangeMode`).
   - **Taken from stream 0:** codec (`bitStreamFormat`), `packetSize`, `encoderCscMode`, chroma sampling, QoS type.
-  - **Bitrate:** the client splits its total bitrate by pixel rate (width × height × fps), with at least
-    1000 kbit/s per stream. The host caps the sum at its configured maximum, scaling every stream alike.
+  - **Bitrate:** the client splits its total bitrate across the streams. It splits in proportion to each display's
+    own bitrate if every display has one (the Qt client sets one per display), otherwise by pixel rate
+    (width × height × fps). Each stream gets at least 1000 kbit/s. The host caps the sum at its configured maximum,
+    scaling every stream alike.
 
 ## 4. Video
 
@@ -109,3 +120,10 @@ when an extra stream's decoder can't start or no complete frame arrives.
 `TESSERA_MOUSE_POSITION_MAGIC` (`0x54000001`) carries an absolute position on one stream's display
 (`tessera_mouse_position_t`). The host maps it onto that display's rectangle. The legacy absolute-mouse packet keeps
 meaning stream 0. Keyboard, relative mouse, scroll, gamepads, touch and pen stay as they are.
+
+## 7. Ending the stream
+
+When the user ends a multistream session (for example with Ctrl+Alt+Shift+Q), the client's ENet disconnect carries
+the data `TESSERA_DISCONNECT_QUIT` (`0x54510001`) instead of 0. The host then removes the session's virtual
+displays at once (section 2). A disconnect with any other data, or an ENet or ping timeout, counts as a lost
+connection. Upstream hosts ignore the disconnect data.

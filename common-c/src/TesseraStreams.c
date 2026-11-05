@@ -100,6 +100,8 @@ static uint64_t pixelRate(const TESSERA_DISPLAY* display) {
 
 void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int count, int* outKbps) {
     bool atFloor[TESSERA_MAX_REQUESTED_DISPLAYS] = { false };
+    uint64_t weight[TESSERA_MAX_REQUESTED_DISPLAYS];
+    bool byBitrate = true;
     int assigned;
 
     if (displays == NULL || outKbps == NULL || count < 1 || count > TESSERA_MAX_REQUESTED_DISPLAYS) {
@@ -107,6 +109,14 @@ void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int c
     }
     if (totalKbps < 0) {
         totalKbps = 0;
+    }
+
+    // The client's bitrates if it gave one for every display, else pixel rates
+    for (int i = 0; i < count; i++) {
+        byBitrate = byBitrate && displays[i].bitrateKbps > 0;
+    }
+    for (int i = 0; i < count; i++) {
+        weight[i] = byBitrate ? (uint64_t)displays[i].bitrateKbps : pixelRate(&displays[i]);
     }
 
     // Too little for the floor everywhere: split evenly.
@@ -129,7 +139,7 @@ void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int c
                 remaining -= TESSERA_MIN_STREAM_BITRATE_KBPS;
             }
             else {
-                rateSum += pixelRate(&displays[i]);
+                rateSum += weight[i];
             }
         }
 
@@ -138,7 +148,7 @@ void LiTesseraSplitBitrate(int totalKbps, const TESSERA_DISPLAY* displays, int c
                 outKbps[i] = TESSERA_MIN_STREAM_BITRATE_KBPS;
             }
             else {
-                outKbps[i] = (int)(remaining * pixelRate(&displays[i]) / rateSum);
+                outKbps[i] = (int)(remaining * weight[i] / rateSum);
                 if (outKbps[i] < TESSERA_MIN_STREAM_BITRATE_KBPS) {
                     atFloor[i] = true;
                     changed = true;
@@ -547,4 +557,10 @@ void tesseraSetHostHdrMode(int stream, bool enabled, const SS_HDR_METADATA* meta
 
 int tesseraGetStreamCountInternal(void) {
     return streamCount;
+}
+
+uint32_t tesseraDisconnectData(void) {
+    // Only a multistream session has displays on the host to remove; stopControlStream() runs before
+    // tesseraDestroyVideoStreams() resets the count
+    return streamCount > 1 ? TESSERA_DISCONNECT_QUIT : 0;
 }

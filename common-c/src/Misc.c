@@ -51,7 +51,8 @@ int gracefullyDisconnectEnetPeer(ENetHost* host, ENetPeer* peer, enet_uint32 lin
 
         // Begin the disconnection process. We'll get ENET_EVENT_TYPE_DISCONNECT once
         // the peer acks all outstanding reliable sends.
-        enet_peer_disconnect_later(peer, 0);
+        // Tessera: tells a Tessera host that the user ended the stream (TESSERA_DISCONNECT_QUIT)
+        enet_peer_disconnect_later(peer, tesseraDisconnectData());
 
         // We must use the internal function which lets us ignore pending interrupts.
         while ((err = serviceEnetHostInternal(host, &event, lingerTimeoutMs, true)) > 0) {
@@ -79,7 +80,7 @@ int gracefullyDisconnectEnetPeer(ENetHost* host, ENetPeer* peer, enet_uint32 lin
     }
     else {
         Limelog("ENet peer is already disconnected\n");
-        enet_peer_disconnect_now(peer, 0);
+        enet_peer_disconnect_now(peer, tesseraDisconnectData()); // Tessera: as above
         return 0;
     }
 }

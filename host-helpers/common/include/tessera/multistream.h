@@ -57,6 +57,39 @@ namespace tessera::multistream {
   /// How many of `requested` displays the session gets.
   plan_t plan_streams(std::size_t requested, const limits_t &limits);
 
+  /// What a launch with a display list does with the virtual displays an earlier launch created.
+  enum class display_reuse_e {
+    create,  ///< There are none: create this client's.
+    reuse,  ///< They show the same client monitors in the same modes: keep them.
+    share,  ///< Another client is streaming them: show them to this client too, unchanged (one set at a time).
+    replace,  ///< Nobody is streaming them: remove them and create this client's.
+  };
+
+  /**
+   * @brief Chooses what happens to the existing virtual displays.
+   * @param displays_exist An earlier launch's virtual displays are still there.
+   * @param same_monitors They were made for the same client monitors and modes as this launch asks for.
+   * @param others_streaming A streaming session is running.
+   */
+  display_reuse_e choose_display_reuse(bool displays_exist, bool same_monitors, bool others_streaming);
+
+  /// Limits a plan to the displays another client streams (`shared_displays` of them), with TESSERA_REASON_SHARED.
+  plan_t share_displays(plan_t plan, std::size_t shared_displays);
+
+  /// What happens to the virtual displays when the last streaming session ends while the app keeps running.
+  enum class display_release_e {
+    keep,  ///< There are none.
+    remove_now,  ///< The user ended the stream (TESSERA_DISCONNECT_QUIT).
+    remove_later,  ///< The connection was lost: keep them for a while, so the client can resume on them.
+  };
+
+  /**
+   * @brief Chooses what happens to the virtual displays.
+   * @param displays_exist Virtual displays are there.
+   * @param client_quit The client's disconnect carried TESSERA_DISCONNECT_QUIT.
+   */
+  display_release_e choose_display_release(bool displays_exist, bool client_quit);
+
   /// Reason token for the launch reply ("encoder-limit", ...).
   std::string_view reason_token(tessera_reason_e reason);
 

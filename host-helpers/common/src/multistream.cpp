@@ -255,6 +255,29 @@ namespace tessera::multistream {
     return {allowed, limits.encoder_max < host_max ? TESSERA_REASON_ENCODER_LIMIT : TESSERA_REASON_HOST_LIMIT};
   }
 
+  display_reuse_e choose_display_reuse(bool displays_exist, bool same_monitors, bool others_streaming) {
+    if (!displays_exist) {
+      return display_reuse_e::create;
+    }
+    if (same_monitors) {
+      return display_reuse_e::reuse;
+    }
+    return others_streaming ? display_reuse_e::share : display_reuse_e::replace;
+  }
+
+  plan_t share_displays(plan_t plan, std::size_t shared_displays) {
+    plan.streams = static_cast<std::uint32_t>(std::clamp<std::size_t>(shared_displays, 1, plan.streams));
+    plan.reason = TESSERA_REASON_SHARED;
+    return plan;
+  }
+
+  display_release_e choose_display_release(bool displays_exist, bool client_quit) {
+    if (!displays_exist) {
+      return display_release_e::keep;
+    }
+    return client_quit ? display_release_e::remove_now : display_release_e::remove_later;
+  }
+
   std::string_view reason_token(tessera_reason_e reason) {
     static constexpr const char *tokens[] = TESSERA_REASON_TOKENS;
     const auto index = static_cast<std::size_t>(reason);

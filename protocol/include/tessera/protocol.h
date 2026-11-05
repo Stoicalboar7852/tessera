@@ -82,11 +82,20 @@ enum tessera_reason_e {
   TESSERA_REASON_UNSUPPORTED = 9,  /**< The host's encoder or capture method can't run several streams. */
   TESSERA_REASON_DECODER_FAILED = 10,  /**< Client side only: the stream's decoder couldn't start. */
   TESSERA_REASON_NO_VIDEO = 11,  /**< Client side only: the stream received no (complete) video. */
+  TESSERA_REASON_SHARED = 12,  /**< Another client is streaming: this session shows that client's displays, at most
+                                    as many as it has (launch reply only, even when every requested stream runs). */
 };
 
 #define TESSERA_REASON_TOKENS \
   {"none", "host-limit", "encoder-limit", "not-permitted", "no-display-driver", "display-failed", "encoder-failed", \
-   "capture-failed", "invalid-request", "unsupported", "decoder-failed", "no-video"}
+   "capture-failed", "invalid-request", "unsupported", "decoder-failed", "no-video", "shared-displays"}
+
+/**
+ * ENet disconnect data (client -> host) of a Tessera client whose user ended the stream. The host then removes the
+ * session's virtual displays at once; any other disconnect (upstream clients send 0, and so does an ENet timeout)
+ * counts as a lost connection, and the displays stay for a while so the client can resume on them.
+ */
+#define TESSERA_DISCONNECT_QUIT 0x54510001u
 
 /* Control messages, 0x5400-0x54FF (Sunshine's extensions use 0x55xx). */
 #define TESSERA_CTRL_IDR_REQUEST 0x5400  /**< client -> host: tessera_ctrl_stream_t */
