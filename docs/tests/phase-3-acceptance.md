@@ -13,6 +13,58 @@ fullscreen, both mouse modes, focus and keyboard, Wi-Fi and Ethernet, the Mac.
 Allow about an hour per client. Results go in the table at the end; the log collector's zip goes to
 `D:\Remote streaming\logs\phase3-acceptance\` on the dev PC.
 
+## Retest after the first run (2026-11-05)
+
+The first run found five problems; four are fixed (`docs/phase-3-design.md`, addendum). This short retest checks
+those fixes, about 20 minutes in all.
+
+**Setup**
+- **Host:** as in section 1. The dev PC's staged host build is already the one with the fixes.
+- **Windows laptop:** download the newest `client-qt-windows-x64` artifact (section 2, step 1). Unzip it **over** the
+  existing `Tessera Moonlight` folder and replace the files. Pairing and settings stay.
+- **Mac:** download the newest `client-qt-macos` artifact and replace `/Applications/Tessera Moonlight.app` with the
+  new app. Run the two Terminal commands in section 3, step 3, again.
+
+**R1. The Displays settings (both clients)**
+1. Open the settings and choose **All displays** under **Displays**.
+2. Check the picture: it shows your monitors arranged as in the OS settings, with the main display marked. Clicking
+   a monitor shows its resolution, frame rate and bitrate.
+3. Check Basic Settings: "Resolution and FPS" and the bitrate slider are replaced by a note pointing to Displays, with
+   the total bitrate.
+4. On the Mac, click the 144 Hz monitor and set its frame rate to 60 FPS and its bitrate to 30 Mbps. The total changes
+   to match. Set the bitrate back with **Automatic**.
+5. Choose **This display**: upstream's Resolution and FPS row and bitrate slider are back. Return to **All displays**.
+
+**R2. The menu bar (Mac)**
+1. Start **Desktop** with both monitors fullscreen.
+2. Click into the stream on each monitor in turn. **Pass:** the macOS menu bar appears on neither monitor.
+3. Press Cmd+Tab to another Mac app: the menu bar comes back. Click into the stream again: it hides again.
+
+**R3. Ending the stream with Ctrl+Alt+Shift+Q (both clients)**
+1. Start a session, then press Ctrl+Alt+Shift+Q (Ctrl+Option+Shift+Q on the Mac).
+2. **Pass:** within a few seconds the virtual displays disappear on the dev PC, and its own monitors are back as
+   before, without choosing "End session". Moonlight still shows Desktop as running.
+3. Click Desktop again. **Pass:** the displays come back, in the same layout.
+
+**R4. Two clients at once**
+1. On the laptop, start a session (**All displays**).
+2. Then start one on the Mac.
+3. **Pass:**
+   - the laptop's windows don't change (the same resolution and frame rate);
+   - the Mac shows the laptop's displays (scaled, perhaps with black bars) and a message that another client is
+     streaming;
+   - after Ctrl+Option+Shift+Q on the Mac, the laptop's session carries on unchanged.
+4. Press Ctrl+Alt+Shift+Q on the laptop: the displays go.
+
+**R5. A lost connection (optional, laptop)**
+1. During a session, turn the laptop's Wi-Fi off.
+2. **Pass:** the session ends on the host within about 10 seconds. The virtual displays stay for about a minute, then
+   go.
+3. Repeat, but turn Wi-Fi back on and start the session again within the minute. **Pass:** it resumes on the same
+   displays.
+
+Collect the logs as in section 5. Note the results in the table in section 6 (R1–R5).
+
 ## 1. Host: the dev PC
 
 1. Open PowerShell **as administrator** and run:
@@ -134,7 +186,8 @@ hardware for both (the overlay's decoder line, and the log); dropped frames don'
    **Pass:** about 120 on the built-in display's stream and 144 on the other, in TestUFO and in the overlay.
 2. Note the overlay's numbers for both; this is the host's heaviest case (the built-in display streams at its native
    size).
-3. Settings > Displays > **Display resolution: Desktop size**, start again and note the numbers again.
+3. Settings > Displays: click the built-in display, set **Resolution** to its "(desktop size)" option, then start
+   again and note the numbers again.
 
 ### T6. V-Sync off (client-side VRR; the Mac, optional on the laptop)
 
@@ -173,3 +226,4 @@ run folder (it prints it at the end) into `D:\Remote streaming\logs\phase3-accep
 | T1 | Windows | | | | | | | |
 | T1 | Mac | | | | | | | |
 | T2–T8 | | | | | | | | |
+| R1–R5 | | | | | | | | |

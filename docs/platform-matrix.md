@@ -5,7 +5,7 @@ Legend: ✅ planned (supported by design) · ⚠️ limited · ❌ not possible 
 
 | Feature | Win | macOS | Android | Android TV | iPadOS | iOS | Verified |
 |---|---|---|---|---|---|---|---|
-| Multi-monitor | ✅ | ✅ | ✅ secondary display (`Presentation`) | ❌ | ✅ external display | ❌ | — |
+| Multi-monitor | ✅ | ✅ | ✅ secondary display (`Presentation`) | ❌ | ✅ external display | ❌ | Win, macOS: first laptop run 2026-11-05 streamed with low latency but found issues; fixes await a retest (`docs/phase-3-design.md`, addendum) |
 | Controllers (multi) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Mic | ✅ | ✅ | ✅ | ⚠️ remote mic | ✅ | ✅ | — |
 | Camera | ✅ | ✅ | ✅ | ⚠️ if present | ✅ | ✅ | — |
@@ -22,3 +22,4 @@ Legend: ✅ planned (supported by design) · ⚠️ limited · ❌ not possible 
 | Shell Launcher | Enterprise/Education only; Pro uses per-user Winlogon `Shell` | brief §5.4 |
 | Topology restore | Per-monitor DPI, SDR white level and virtual-mode desktop scaling are not captured | ADR 0003 |
 | Emergency hotkey | Can't fire on the secure desktop (lock screen, UAC prompt); `recover.exe` and the service watchdog cover it | Phase 0 design §4.5 |
+| Several clients at once | One set of virtual displays: a second client shares the first one's displays, at their modes, until Phase 5 (F3) | ADR 0009 |

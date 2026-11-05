@@ -279,3 +279,47 @@ overlays; VRR on the virtual display; doubling the virtual display refresh rate.
 6. No refresh-rate doubling; measure first. **Recommended.**
 7. VRR: client-side presentation checked in Phase 3; virtual-display VRR recorded as a feature request for after
    Phase 3. **Recommended.**
+
+## Addendum (2026-11-05): after the first laptop test
+
+The first test on the two laptops (Windows on Wi-Fi, MacBook Pro) streamed with very low latency. It found five
+problems; the user approved these changes on 2026-11-05 ("Build as proposed").
+
+**1. macOS: the menu bar covered the extra displays.** SDL keeps only the fullscreen window with keyboard focus
+above the menu bar and drops the others to the normal level. Now, while any stream window has focus, every fullscreen
+stream window sits above the menu bar; when another app has focus they all return to the normal level
+(`tessera/windowlevel_mac.mm`, re-applied after window events and at most every 100 ms).
+
+**2. Per-display resolution, frame rate and bitrate (replaces the single "Resolution of each display" setting).**
+Upstream's Resolution/FPS and bitrate rows describe one stream, so multi-display settings now live in the
+"Displays" section:
+- A picture of the client's monitors, arranged as the OS arranges them, marking the main display and those that
+  will stream. Clicking a monitor shows its settings.
+- Per monitor, stored under `tessera/monitors/<key>/`:
+  - resolution: native, desktop size (for scaled monitors), or 2160/1440/1080/720 lines below native, at the
+    monitor's aspect ratio;
+  - frame rate: native, or 144/120/60/30 below it;
+  - bitrate: automatic (upstream's default for that size and frame rate) or a value from 0.5 Mbps to the slider's
+    maximum.
+
+  In Chosen mode, a "Stream this display" checkbox replaces the old list. Monitors without their own settings use
+  the old `tessera/displayResolution` value.
+- The session's bitrate is the sum of the streamed displays' bitrates. Each display's bitrate travels with it, and
+  common-c splits the total in proportion to them (protocol §3), so each display gets its own value. When the host
+  accepts fewer streams, the total covers only those.
+- While several displays will stream, upstream's Resolution/FPS row and bitrate slider are hidden. In their place, a
+  line points to Displays and shows the total (`SettingsView.qml`, marked edits). Streaming one display is unchanged.
+
+**3. A second client changed the first client's displays.** The second client resumed the running app with its own
+monitors, and the host replaced the virtual displays with that client's modes. Both clients then saw the same pair.
+Interim behaviour (ADR 0009): while a client is streaming, another client's launch shares the existing displays
+unchanged (at most as many streams as there are displays, reason `shared-displays`). Its status overlay says so.
+Giving each client its own displays stays in Phase 5.
+
+**4. Ctrl+Alt+Shift+Q left the displays on the host until "End session".** When the last stream ends and the app keeps
+running, the host now removes the virtual displays itself (ADR 0009). If the user ended the stream, they go at once:
+the Tessera client's ENet disconnect carries `TESSERA_DISCONNECT_QUIT`, protocol §7. If the connection was lost, they
+go after 60 s unless a client streams again. Resuming creates them again.
+
+**5. The client's main display becoming the host's main display after idling** is F4 (Phase 5); it was never built in
+Phase 3.
