@@ -118,6 +118,41 @@ Refresh refreshFraction(double hz)
     return {static_cast<int>(std::lround(hz * 1000.0)), 1000};
 }
 
+int widthForHeight(int nativeWidth, int nativeHeight, int height)
+{
+    if (nativeHeight <= 0) {
+        return 0;
+    }
+    return static_cast<int>(std::lround(static_cast<double>(nativeWidth) * height / nativeHeight / 2.0)) * 2;
+}
+
+std::vector<Size> smallerSizes(int nativeWidth, int nativeHeight)
+{
+    std::vector<Size> sizes;
+    for (int height : {2160, 1440, 1080, 720}) {
+        if (height < nativeHeight) {
+            sizes.push_back({widthForHeight(nativeWidth, nativeHeight, height), height});
+        }
+    }
+    return sizes;
+}
+
+std::vector<int> lowerFrameRates(const Refresh& refresh)
+{
+    std::vector<int> rates;
+    if (refresh.denominator <= 0) {
+        return rates;
+    }
+    const double hz = static_cast<double>(refresh.numerator) / refresh.denominator;
+    for (int fps : {144, 120, 60, 30}) {
+        // 59.94 Hz offers 30, not 60
+        if (fps < hz - 0.5) {
+            rates.push_back(fps);
+        }
+    }
+    return rates;
+}
+
 std::vector<int> streamOrder(const std::vector<Rect>& desktop, const std::vector<bool>& chosen,
                              int osPrimary, int moonlightMonitor, int maxStreams)
 {

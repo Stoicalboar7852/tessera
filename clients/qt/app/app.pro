@@ -256,12 +256,14 @@ HEADERS += \
     streaming/tessera/displayselection.h \
     streaming/tessera/monitors.h \
     streaming/tessera/multidisplay.h \
-    streaming/tessera/videostats.h
+    streaming/tessera/videostats.h \
+    streaming/tessera/windowlevel.h
 win32 {
     SOURCES += streaming/tessera/monitors_win.cpp
 }
 macx {
-    SOURCES += streaming/tessera/monitors_mac.mm
+    SOURCES += streaming/tessera/monitors_mac.mm \
+        streaming/tessera/windowlevel_mac.mm
     LIBS += -framework ApplicationServices
 }
 

@@ -7,6 +7,7 @@ import StreamingPreferences 1.0
 import ComputerManager 1.0
 import SdlGamepadKeyNavigation 1.0
 import SystemProperties 1.0
+import TesseraDisplaySettings 1.0 // [fork] Tessera
 
 Flickable {
     id: settingsPage
@@ -124,11 +125,22 @@ Flickable {
                     text: qsTr("Setting values too high for your PC or network connection may cause lag, stuttering, or errors.")
                     font.pointSize: 9
                     wrapMode: Text.Wrap
+                    visible: !TesseraDisplaySettings.active // [fork] Tessera
+                }
+
+                // [fork] Tessera: streaming several displays, each has its own resolution, frame rate and bitrate
+                Label {
+                    width: parent.width
+                    visible: TesseraDisplaySettings.active
+                    text: qsTr("Streaming %1 displays: set each display's resolution and frame rate under Displays below.").arg(TesseraDisplaySettings.streamCount)
+                    font.pointSize: 9
+                    wrapMode: Text.Wrap
                 }
 
                 Row {
                     spacing: 5
                     width: parent.width
+                    visible: !TesseraDisplaySettings.active // [fork] Tessera
 
                     AutoResizingComboBox {
                         property int lastIndexValue
@@ -672,6 +684,24 @@ Flickable {
                     text: qsTr("Video bitrate:")
                     font.pointSize: 12
                     wrapMode: Text.Wrap
+                    visible: !TesseraDisplaySettings.active // [fork] Tessera
+                }
+
+                // [fork] Tessera: the total of the per-display bitrates
+                Label {
+                    width: parent.width
+                    visible: TesseraDisplaySettings.active
+                    text: qsTr("Video bitrate: %1 Mbps in total").arg(TesseraDisplaySettings.totalBitrateKbps / 1000.0)
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+                }
+
+                Label {
+                    width: parent.width
+                    visible: TesseraDisplaySettings.active
+                    text: qsTr("Set each display's bitrate under Displays below.")
+                    font.pointSize: 9
+                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -680,11 +710,13 @@ Flickable {
                     text: qsTr("Lower the bitrate on slower connections. Raise the bitrate to increase image quality.")
                     font.pointSize: 9
                     wrapMode: Text.Wrap
+                    visible: !TesseraDisplaySettings.active // [fork] Tessera
                 }
 
                 Row {
                     width: parent.width
                     spacing: 5
+                    visible: !TesseraDisplaySettings.active // [fork] Tessera
 
                     Slider {
                         id: slider

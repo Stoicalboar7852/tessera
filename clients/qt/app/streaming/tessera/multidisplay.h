@@ -15,8 +15,13 @@
 class Session;
 class NvComputer;
 class IVideoDecoder;
+class StreamingPreferences;
 
 namespace tessera {
+
+// Upstream's bitrate rules for the per-display bitrates: its default bitrate (with the 4:4:4 setting) and the settings
+// slider's maximum (with the unlocked-bitrate setting)
+BitrateRules bitrateRules(const StreamingPreferences* preferences);
 
 class MultiDisplay
 {
@@ -104,6 +109,7 @@ private:
     void handleWindowEvent(StreamWindow& streamWindow, const SDL_WindowEvent& event);
     void closeStream(StreamWindow& streamWindow, int reason);
     bool keyboardFocusIsOurs() const;
+    void updateWindowLevels();
     void checkMonitorsPresent();
     void showStatus(const QString& text);
 
@@ -126,6 +132,8 @@ private:
     int m_StatusGeneration = 0;
     SDL_TimerID m_StatusTimer = 0;
     bool m_PendingStatus = false; // shown before stream 0's renderer existed
+    bool m_WindowLevelsQueued = false; // macOS: an SDL_CODE_TESSERA_WINDOW_LEVELS event is queued
+    Uint32 m_WindowLevelsTicks = 0;
 };
 
 }

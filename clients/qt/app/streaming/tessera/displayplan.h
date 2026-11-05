@@ -39,6 +39,21 @@ struct Refresh {
 // 0.02 Hz of one, else rounded to millihertz. Non-positive rates give 60/1.
 Refresh refreshFraction(double hz);
 
+struct Size {
+    int width = 0;
+    int height = 0;
+};
+
+// The width that keeps a monitor's aspect ratio at `height` lines, rounded to an even number of pixels
+int widthForHeight(int nativeWidth, int nativeHeight, int height);
+
+// The smaller sizes a monitor can stream at: 2160, 1440, 1080 and 720 lines below its native height, at its aspect
+// ratio, largest first
+std::vector<Size> smallerSizes(int nativeWidth, int nativeHeight);
+
+// The lower frame rates a monitor can stream at: 144, 120, 60 and 30 below its refresh rate, highest first
+std::vector<int> lowerFrameRates(const Refresh& refresh);
+
 // The monitors to stream, by index into `desktop`, in stream order: stream 0 first (the OS primary if it is chosen,
 // else the monitor showing Moonlight if it is chosen, else the leftmost chosen one), then the other chosen monitors
 // left to right (top to bottom for equal x). At most `maxStreams` entries.

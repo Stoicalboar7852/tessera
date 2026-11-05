@@ -1,6 +1,7 @@
 #include "multidisplay.h"
 
 #include "videostats.h"
+#include "windowlevel.h"
 
 #include "backend/nvcomputer.h"
 #include "backend/nvhttp.h"
@@ -18,12 +19,16 @@
 #define SDL_CODE_TESSERA_STREAM_STATUS 0x5410
 #define SDL_CODE_TESSERA_CLEAR_STATUS 0x5411
 #define SDL_CODE_TESSERA_FLUSH_BARRIER 0x5412
+#define SDL_CODE_TESSERA_WINDOW_LEVELS 0x5413
 
 namespace tessera {
 
 namespace {
 
 constexpr Uint32 kStatusMs = 10000;
+
+// macOS: how often any event checks the windows' levels
+constexpr Uint32 kWindowLevelsMs = 100;
 
 // The bitrate slider's maximum in gui/SettingsView.qml
 constexpr int kMaximumBitrateKbps = 150000;
@@ -312,10 +317,17 @@ void MultiDisplay::createWindows(SDL_Surface* icon, bool fullScreen)
 
     // Keyboard focus starts on stream 0's window, as in a single-display session
     SDL_RaiseWindow(m_Session->m_Window);
+    updateWindowLevels();
 
     if (!m_HostSupportsMultiStream) {
         showStatus(QObject::tr("%1 can't stream several displays (it isn't a Tessera host). Streaming %2 only.")
                        .arg(m_Session->m_Computer->name, m_Plan.monitors.front().name));
+    }
+    else if (reasonFromToken(m_HostReason) == TESSERA_REASON_SHARED) {
+        // The other client's displays keep their modes, so this client sees them scaled
+        showStatus(QObject::tr("Another client is streaming %1. Showing its %2 display(s), as they are; "
+                               "a later version will add this computer's own displays.")
+                       .arg(m_Session->m_Computer->name).arg(streams));
     }
     else if (streams < m_Plan.displays.size()) {
         showStatus(QObject::tr("Streaming %1 of %2 displays: %3.")
@@ -331,9 +343,22 @@ bool MultiDisplay::handleEvent(SDL_Event& event)
         m_Session->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayStatusUpdate);
     }
 
+#ifdef Q_OS_DARWIN
+    // SDL lowers a fullscreen window below the menu bar whenever it updates the mouse grab of a window without focus,
+    // which upstream's handling of an earlier event may have done
+    if (SDL_TICKS_PASSED(SDL_GetTicks(), m_WindowLevelsTicks + kWindowLevelsMs)) {
+        updateWindowLevels();
+    }
+#endif
+
     switch (event.type) {
     case SDL_USEREVENT:
         switch (event.user.code) {
+        case SDL_CODE_TESSERA_WINDOW_LEVELS:
+            m_WindowLevelsQueued = false;
+            updateWindowLevels();
+            return true;
+
         case SDL_CODE_FRAME_READY:
             // Pacers of main-thread renderers post this without saying which; a renderer with no new frame does nothing
             for (StreamWindow* streamWindow : std::as_const(m_Windows)) {
@@ -390,6 +415,16 @@ bool MultiDisplay::handleEvent(SDL_Event& event)
                 m_Session->m_InputHandler != nullptr) {
             m_Session->m_InputHandler->updateKeyboardGrabState();
         }
+
+#ifdef Q_OS_DARWIN
+        // The levels again once upstream has handled this event
+        if (ownsWindow(windowId) && !m_WindowLevelsQueued) {
+            SDL_Event levelsEvent = {};
+            levelsEvent.type = SDL_USEREVENT;
+            levelsEvent.user.code = SDL_CODE_TESSERA_WINDOW_LEVELS;
+            m_WindowLevelsQueued = SDL_PushEvent(&levelsEvent) == 1;
+        }
+#endif
 
         StreamWindow* streamWindow = findWindow(windowId);
         if (streamWindow == nullptr) {
@@ -599,17 +634,23 @@ void MultiDisplay::getWindowedSize(const StreamWindow& streamWindow, int& width,
     height = dst.h;
 }
 
+BitrateRules bitrateRules(const StreamingPreferences* preferences)
+{
+    BitrateRules rules;
+    const bool yuv444 = preferences->enableYUV444;
+    rules.defaultKbps = [yuv444](int width, int height, int fps) {
+        return StreamingPreferences::getDefaultBitrate(width, height, fps, yuv444);
+    };
+    rules.maximumKbps = preferences->unlockBitrate ? kUnlockedMaximumBitrateKbps : kMaximumBitrateKbps;
+    return rules;
+}
+
 int MultiDisplay::bitrateKbps(int streams) const
 {
-    const StreamingPreferences* preferences = m_Session->m_Preferences;
+    // Each display's own bitrate (DisplaySettings), for the displays that stream
     DisplayPlan plan = m_Plan;
     plan.displays.resize(std::min(streams, static_cast<int>(plan.displays.size())));
-    return planBitrateKbps(plan, preferences->autoAdjustBitrate, preferences->bitrateKbps,
-                           preferences->unlockBitrate ? kUnlockedMaximumBitrateKbps : kMaximumBitrateKbps,
-                           [preferences](int width, int height, int fps) {
-                               return StreamingPreferences::getDefaultBitrate(width, height, fps,
-                                                                              preferences->enableYUV444);
-                           });
+    return planBitrateKbps(plan);
 }
 
 void MultiDisplay::flushWindowEvents(StreamWindow& streamWindow)
@@ -765,6 +806,26 @@ bool MultiDisplay::keyboardFocusIsOurs() const
     return focus != nullptr && ownsWindow(SDL_GetWindowID(focus));
 }
 
+void MultiDisplay::updateWindowLevels()
+{
+    m_WindowLevelsTicks = SDL_GetTicks();
+#ifdef Q_OS_DARWIN
+    // While one of the session's windows has the keyboard focus, all its fullscreen windows cover the menu bar;
+    // otherwise none does, so other apps show
+    SDL_Window* focus = SDL_GetKeyboardFocus();
+    const bool active = focus != nullptr && ownsWindow(SDL_GetWindowID(focus));
+    const auto update = [active](SDL_Window* window) {
+        if (window != nullptr && (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0) {
+            setAboveMenuBar(window, active);
+        }
+    };
+    update(m_Session->m_Window);
+    for (const StreamWindow* streamWindow : std::as_const(m_Windows)) {
+        update(streamWindow->window);
+    }
+#endif
+}
+
 void MultiDisplay::checkMonitorsPresent()
 {
     // v1 can't change a session's streams, so losing a streamed monitor ends the session
@@ -835,6 +896,8 @@ QString MultiDisplay::reasonText(int reason)
         return QObject::tr("this computer couldn't start a video decoder for it");
     case TESSERA_REASON_NO_VIDEO:
         return QObject::tr("no video arrived");
+    case TESSERA_REASON_SHARED:
+        return QObject::tr("another client is streaming the host's displays");
     case TESSERA_REASON_UNSUPPORTED:
     default:
         return QObject::tr("the host doesn't support it");

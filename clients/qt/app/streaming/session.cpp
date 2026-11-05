@@ -615,7 +615,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
             qtScreen = m_QtWindow->screen()->geometry().topLeft();
         }
         const tessera::DisplayPlan plan = tessera::planDisplays(tessera::DisplaySettings::load(), tessera::enumerateMonitors(),
-                                                                qtScreen, m_Preferences->enableHdr);
+                                                                qtScreen, m_Preferences->enableHdr,
+                                                                tessera::bitrateRules(m_Preferences));
+        tessera::logPlan(plan);
         for (const QString& warning : plan.warnings) {
             emitLaunchWarning(warning);
         }

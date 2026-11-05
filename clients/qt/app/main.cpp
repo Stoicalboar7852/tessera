@@ -55,6 +55,7 @@
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
 #include "streaming/tessera/displayselection.h" // [fork] Tessera
+#include "streaming/tessera/multidisplay.h" // [fork] Tessera
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
@@ -963,8 +964,11 @@ int main(int argc, char *argv[])
     // [fork] Tessera: the multi-display settings section
     qmlRegisterSingletonType<tessera::DisplaySettingsModel>("TesseraDisplaySettings", 1, 0,
                                                             "TesseraDisplaySettings",
-                                                            [](QQmlEngine*, QJSEngine*) -> QObject* {
-                                                                return new tessera::DisplaySettingsModel();
+                                                            [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
+                                                                StreamingPreferences* preferences = StreamingPreferences::get(qmlEngine);
+                                                                return new tessera::DisplaySettingsModel([preferences] {
+                                                                    return tessera::bitrateRules(preferences);
+                                                                });
                                                             });
 
     // Create the identity manager on the main thread
